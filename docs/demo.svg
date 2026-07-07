@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="172" viewBox="0 0 920 172" font-family="SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace">
+  <defs>
+    <clipPath id="card-clip">
+      <rect x="0" y="0" width="920" height="172" rx="10" ry="10" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#card-clip)">
+    <rect x="0" y="0" width="920" height="172" fill="#0d1117" />
+    <rect x="0" y="0" width="920" height="34" fill="#161b22" />
+    <line x1="0" y1="34" x2="920" y2="34" stroke="#30363d" stroke-width="1" />
+
+    <circle cx="20" cy="17" r="6" fill="#ff5f56" />
+    <circle cx="40" cy="17" r="6" fill="#ffbd2e" />
+    <circle cx="60" cy="17" r="6" fill="#27c93f" />
+    <text x="460" y="21" text-anchor="middle" font-size="12" fill="#8b949e">zsh</text>
+  </g>
+
+  <rect x="0" y="0" width="920" height="172" rx="10" ry="10" fill="none" stroke="#30363d" stroke-width="1" />
+
+  <text x="24" y="66" font-size="14.5" fill="#c9d1d9">
+    <tspan fill="#3fb950">$</tspan> python3 usage-estimate.py
+  </text>
+
+  <text x="24" y="98" font-size="14.5" fill="#8b949e">
+    <tspan>5h: </tspan><tspan fill="#3fb950" font-weight="600">41%</tspan><tspan> (resets 2h 13m) | week all: </tspan><tspan fill="#d29922" font-weight="600">69%</tspan><tspan> | week fable: </tspan><tspan fill="#f85149" font-weight="600">94%</tspan><tspan> (resets 4d 3h) | pending: </tspan><tspan fill="#c9d1d9" font-weight="600">2</tspan>
+  </text>
+
+  <text x="24" y="128" font-size="12.5" fill="#484f58">
+    calibrated against the real % from claude.ai/settings/usage — not an official Anthropic figure
+  </text>
+
+  <text x="24" y="152" font-size="12.5" fill="#484f58">
+    weighted by real per-model, per-token-type dollar cost — not raw token count
+  </text>
+</svg>

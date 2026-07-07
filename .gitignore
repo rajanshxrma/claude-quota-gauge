@@ -1,0 +1,6 @@
+usage-calibration.json
+usage-watch-state.json
+*.log
+__pycache__/
+*.pyc
+.DS_Store
