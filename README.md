@@ -3,7 +3,7 @@
 Know how much of your Claude Max weekly quota you've actually burned — as a
 live %, in your terminal, before you hit the wall.
 
-![statusline demo](docs/demo.svg)
+![demo: a session starting with the usage snapshot already known, parking an item with /pending, and the next session's snapshot reflecting it](docs/demo.gif)
 
 Anthropic shows your real usage % in exactly one place: the claude.ai
 settings page. No API, no statusline, no warning before you're throttled.
