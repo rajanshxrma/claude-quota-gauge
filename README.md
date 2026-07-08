@@ -12,6 +12,7 @@ dollar cost (not raw token count), anchors once to the real number off the
 settings page, and scales from there. Every new Claude Code session starts
 already knowing your %. A background watcher pings you at 85%.
 
+![version](https://img.shields.io/badge/version-0.1.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
