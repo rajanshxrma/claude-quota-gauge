@@ -1,5 +1,6 @@
 usage-live.json
 usage-watch-state.json
+usage-fable-calibration.json
 *.log
 __pycache__/
 *.pyc

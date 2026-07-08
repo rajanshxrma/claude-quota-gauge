@@ -1,8 +1,8 @@
 # claude-quota-gauge
 
 Your real Claude Max quota %, in your terminal, straight from Claude Code
-itself — no scraping, no browser automation, no stored credentials, no
-estimating.
+itself — no scraping, no stored credentials, no estimating for the two
+numbers Anthropic actually reports.
 
 ![demo: a session starting with the usage snapshot already known, parking an item with /pending, and the next session's snapshot reflecting it](docs/demo.gif)
 
@@ -15,7 +15,14 @@ your browser, touches an API key, or approximates anything — every number
 shown is the same one `claude.ai/settings/usage` would show you, because
 it's the same data, straight from Claude Code.
 
-![version](https://img.shields.io/badge/version-0.2.1-informational)
+If your account also has a separate weekly pool for one model (Fable, on
+Claude Max) that `rate_limits` doesn't break out, there's an optional
+add-on for that too — see [Optional: per-model weekly estimate](#optional-per-model-weekly-estimate-eg-fable).
+It's the one number in this tool that isn't straight from Anthropic's
+backend, so it's calibrated by hand and always labeled as an estimate,
+never shown with the same confidence as the two numbers above.
+
+![version](https://img.shields.io/badge/version-0.3.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -35,7 +42,10 @@ git clone https://github.com/rajanshxrma/claude-quota-gauge && cd claude-quota-g
 
 That's it — no calibration step, nothing to read off a settings page by
 hand. Open Claude Code and the statusline shows your real 5h/weekly % as
-soon as it first renders, usually within a few seconds.
+soon as it first renders, usually within a few seconds. If your account
+also has its own weekly pool for one model (e.g. Fable), see
+[Optional: per-model weekly estimate](#optional-per-model-weekly-estimate-eg-fable)
+for a one-time opt-in step to track that too.
 
 ---
 
@@ -76,6 +86,7 @@ see your shell profile.
 | Variable | Default | What it does |
 |---|---|---|
 | `CLAUDE_USAGE_PENDING_FILE` | `./PENDING.md`, then `~/.claude/PENDING.md` | See the PENDING.md convention below |
+| `CLAUDE_USAGE_TRACK_MODEL` | `fable` | Which model gets the optional calibrated weekly estimate — see below |
 | `CLAUDE_USAGE_ALERT_THRESHOLD` | `85` | % that triggers a desktop notification |
 
 ## The PENDING.md convention
@@ -91,6 +102,35 @@ Run `/pending <what's parked>` to add one from inside a Claude Code session —
 it finds the right file (same resolution order as above), creates it from
 the template if it doesn't exist yet, and inserts your item as a new
 newest-on-top `## ` heading without touching anything already there.
+
+## Optional: per-model weekly estimate (e.g. Fable)
+
+`rate_limits` only exposes two real numbers: 5-hour and weekly-all-models.
+If your account has its own separate weekly pool for one model — Fable, on
+the Claude Max plan, has its own row on `claude.ai/settings/usage` distinct
+from the shared pool — there's no API for that figure. This add-on fills
+that one gap the same way the whole tool used to work before `rate_limits`
+existed: a local, cost-weighted estimate, calibrated by hand against the
+real number on the settings page, scaled between calibrations by local
+token deltas (`bin/tokens-since.py`, `bin/usage-calibrate-fable.py`).
+
+Because it's an estimate and not a verified reported figure, it's always
+shown differently from the other two — labeled `(est.)` in the statusline,
+reported as stale (rather than silently wrong) once the weekly window
+rolls over, and called out as an estimate everywhere it's relayed
+(SessionStart context, watcher notifications).
+
+Setup, one time:
+
+```bash
+/gauge-cali-fable
+```
+
+This drives the browser to `claude.ai/settings/usage`, reads the real %
+for whatever `CLAUDE_USAGE_TRACK_MODEL` is set to (default `fable`), and
+writes the calibration. Re-run it whenever the statusline says the
+estimate has gone stale — Claude does this on its own once told to, since
+viewing a settings page has no side effects.
 
 ## Optional: background watcher
 
@@ -115,19 +155,25 @@ opt-in and one command.
 ## Why I built this
 
 I'm on the Max plan and kept getting surprised by the weekly cap mid-session
-with zero warning. For a while this ran on a cost-weighted local estimate,
-calibrated by hand against `claude.ai/settings/usage` — it worked, but it
-was an approximation with a manual step. Once Claude Code started handing
-the real percentage straight to the statusline command, there was no reason
-to keep estimating: this now shows the exact same number the settings page
-does, automatically, with nothing to calibrate.
+with zero warning. For a while this ran entirely on a cost-weighted local
+estimate, calibrated by hand against `claude.ai/settings/usage` — it
+worked, but it was an approximation with a manual step for every number.
+Once Claude Code started handing the real percentage straight to the
+statusline command, there was no reason to keep estimating the 5-hour and
+weekly-all-models figures: those now show the exact same number the
+settings page does, automatically, with nothing to calibrate. The old
+estimate mechanism still earns its keep for the one number that has no
+real API at all — a separate model's weekly pool (Fable) — but it's opt-in
+and always labeled as what it is.
 
 ## What's not included, on purpose
 
-- **A per-model weekly breakdown** — Anthropic doesn't expose one anywhere,
-  including through `rate_limits`. Only "5-hour" and "weekly (all models)"
-  are real, verifiable numbers, so those are the only two shown. No
-  estimated substitute is shown in their place.
+- **A verified per-model weekly breakdown from Anthropic itself** —
+  `rate_limits` doesn't expose one, and there's no other API for it. Only
+  "5-hour" and "weekly (all models)" are real, reported numbers. An
+  optional, clearly-labeled *estimate* for one model is available (see
+  above) for accounts with their own separate pool — it's never shown with
+  the same confidence as the two verified figures.
 - **Email/push delivery** — the watcher uses stock macOS `osascript` only.
   No SMTP, no third-party notification service, nothing account-specific.
 - **Stored credentials of any kind** — nothing here logs into `claude.ai`,

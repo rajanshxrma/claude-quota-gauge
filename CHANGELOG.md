@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-07-08
+
+### Added
+- Brought back an optional, clearly-labeled weekly estimate for one model
+  (default: Fable) that Anthropic's real `rate_limits` field doesn't break
+  out — 0.2.0 dropped this entirely rather than let it look like real data.
+  It's the same cost-weighted local estimate the tool used to run on for
+  everything, now scoped to just this one gap and anchored to Claude Code's
+  real reported reset time (`usage-calibrate-fable.py`, `tokens-since.py`
+  restored, `fable_estimate()` in `usage_common.py`). Always shown as
+  `(est.)` in the statusline, reported as stale rather than silently wrong
+  once the weekly window rolls over, and flagged as an estimate everywhere
+  it's relayed (SessionStart context, watcher notifications). New
+  `/gauge-cali-fable` command and `CLAUDE_USAGE_TRACK_MODEL` config var.
+
 ## [0.2.1] - 2026-07-08
 
 ### Fixed

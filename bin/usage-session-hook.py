@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""SessionStart hook: injects the real usage % into context, read from the
-cache the statusline command wrote on its last render. There's nothing to
-calibrate here -- the numbers came straight from Claude Code's own
-rate_limits data (Anthropic's real backend figures), so this is purely
-informational, not an instruction to go fetch anything.
+"""SessionStart hook: injects the usage % into context, read from the cache
+the statusline command wrote on its last render. The 5h/weekly numbers came
+straight from Claude Code's own rate_limits data (Anthropic's real backend
+figures) -- purely informational, nothing to fetch. The optional per-model
+line (e.g. fable), if present, is a calibrated estimate, not real reported
+data -- flagged as such, and flagged as stale (with the recalibration
+command named) when it needs a fresh read of claude.ai/settings/usage.
+Reading that page has no side effects, so recalibrate immediately when
+stale rather than waiting to be asked.
 """
 import sys, os, json
 from datetime import datetime, timezone
@@ -39,6 +43,22 @@ def main():
 
         line = " | ".join(parts) if parts else "no rate limit data cached yet"
         context = f"Claude usage (real, from Claude Code's own rate_limits -- not estimated): {line}"
+
+        model = cache.get("fable_tracked_model")
+        if model and cache.get("fable_stale"):
+            context += (
+                f" | {model} weekly estimate is stale -- read the real % off "
+                f"claude.ai/settings/usage and run `python3 ~/.claude/scripts/"
+                f"usage-calibrate-fable.py <pct>` now, no need to ask first "
+                f"(viewing that page has no side effects)."
+            )
+        elif model and "fable_pct" in cache:
+            resets = fmt_delta(cache.get("fable_resets_at"), now)
+            context += (
+                f" | {model} weekly: {cache['fable_pct']:.0f}% "
+                f"(estimate, calibrated against claude.ai/settings/usage -- "
+                f"not a verified rate_limits figure)" + (f", resets {resets}" if resets else "")
+            )
 
     print(json.dumps({
         "hookSpecificOutput": {
