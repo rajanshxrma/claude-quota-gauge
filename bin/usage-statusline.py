@@ -7,11 +7,13 @@ numbers. This script prints the statusline text and caches the numbers to
 disk so the SessionStart hook and the background watcher can read the
 latest known real values without needing stdin themselves.
 
-It also surfaces one estimated number alongside the two real ones: a
-per-model weekly % (default Fable) that rate_limits doesn't expose at all.
-That figure is scaled from local token deltas against a manual calibration
-(see usage-calibrate-fable.py) and is always labeled "(est.)" -- never
-presented with the same confidence as the two verified numbers above it.
+It also surfaces one more number alongside the two real ones: a per-model
+weekly % (default Fable) that rate_limits doesn't expose at all. That
+figure is scaled from local token deltas against a manual calibration (see
+usage-calibrate-fable.py) -- shown without a separate confidence label
+since it tracks closely (rajan's own tolerance: within ~1%), but it still
+reports itself as stale rather than a silently wrong number once the
+weekly window rolls over without a fresh calibration.
 """
 import sys, os, json
 from datetime import datetime, timezone
@@ -87,7 +89,7 @@ def main():
             cache.pop("fable_resets_at", None)
         else:
             resets = fmt_delta(fable["resets_at"], now)
-            parts.append(f"{fable['tracked_model']}: {fable['pct']:.0f}% est." + (f" (resets {resets})" if resets else ""))
+            parts.append(f"{fable['tracked_model']}: {fable['pct']:.0f}%" + (f" (resets {resets})" if resets else ""))
             cache["fable_pct"] = fable["pct"]
             cache["fable_resets_at"] = fable["resets_at"]
 
