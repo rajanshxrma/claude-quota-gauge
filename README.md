@@ -110,6 +110,12 @@ headings (excluding ones with "RESOLVED" in the title) and surfaces it as
 `pending: N` in your statusline — a standing, ambient reminder that
 something's still open. See `examples/PENDING.md` for the shape.
 
+Run `/pending <what's parked>` to add one from inside a Claude Code session —
+it finds the right file (same resolution order as above), creates it from
+the template if it doesn't exist yet, and inserts your item as a new
+newest-on-top `## ` heading without touching anything already there.
+`install.sh` copies it to `~/.claude/commands/` alongside `/usage-recalibrate`.
+
 ## Optional: background watcher
 
 `launchd/com.example.claude-usage-watch.plist.example` runs `usage-watch.py`

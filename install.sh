@@ -12,8 +12,9 @@ mkdir -p "$SCRIPTS_DIR" "$COMMANDS_DIR"
 cp "$SCRIPT_DIR"/bin/* "$SCRIPTS_DIR/"
 chmod +x "$SCRIPTS_DIR"/*.py "$SCRIPTS_DIR"/*.sh
 cp "$SCRIPT_DIR"/commands/usage-recalibrate.md "$COMMANDS_DIR/"
+cp "$SCRIPT_DIR"/commands/pending.md "$COMMANDS_DIR/"
 echo "  copied scripts to $SCRIPTS_DIR"
-echo "  copied /usage-recalibrate to $COMMANDS_DIR"
+echo "  copied /usage-recalibrate and /pending to $COMMANDS_DIR"
 
 if command -v ccusage >/dev/null 2>&1 || [ -x "$HOME/.npm-global/bin/ccusage" ]; then
   echo "  found ccusage"
