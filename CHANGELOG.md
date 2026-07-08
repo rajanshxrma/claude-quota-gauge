@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-07-08
+
+### Changed
+- Dropped the `(est.)` label 0.3.0 attached to the per-model weekly figure
+  everywhere it appeared (statusline, SessionStart context, watcher
+  notifications) — rajan's explicit call, based on this figure tracking
+  real numbers closely (his stated tolerance: within ~1%) across the time
+  it ran as the tool's only mechanism, before `rate_limits` existed. It's
+  now shown the same way as the two real numbers. The staleness check is
+  unchanged and still reports itself explicitly (`fable: stale, run
+  /gauge-cali-fable`) rather than showing a number scaled against an
+  already-ended window — that's a genuine failure mode, not a confidence
+  question, so it still speaks up.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added

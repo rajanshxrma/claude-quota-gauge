@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Calibrates a per-model weekly % estimate (default: Fable) that Claude
-Code's own `rate_limits` field doesn't expose -- Anthropic's real backend
-reports one aggregate weekly %, not a per-model breakdown, even though
+"""Calibrates a per-model weekly % (default: Fable) that Claude Code's own
+`rate_limits` field doesn't expose -- Anthropic's real backend reports one
+aggregate weekly %, not a per-model breakdown, even though
 claude.ai/settings/usage itself shows a separate row for models with their
-own pool (e.g. Fable). This is the one number this tool shows that isn't a
-verified reported figure -- it's a local estimate scaled from token deltas,
-so the statusline always labels it "(est.)" and reports staleness rather
-than ever presenting it as fact.
+own pool (e.g. Fable). This is the one number this tool shows that isn't
+pulled straight from rate_limits -- it's calibrated by hand against that
+settings page and scaled locally between calibrations. It reports
+staleness once the weekly window rolls over without a fresh calibration,
+rather than showing a number scaled against a window that's already ended.
 
 Anchors the weekly window to Claude Code's real reported reset time (cached
 by the last statusline render in usage-live.json) instead of a guessed
