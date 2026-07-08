@@ -44,6 +44,17 @@ def pending_tasks_count():
         )
 
 
+def version_lt(a, b):
+    """Compares dotted version strings numerically (e.g. "2.1.9" < "2.1.80").
+    Returns False on anything unparseable rather than guessing."""
+    try:
+        a_parts = [int(x) for x in a.split(".")]
+        b_parts = [int(x) for x in b.split(".")]
+    except (ValueError, AttributeError):
+        return False
+    return a_parts < b_parts
+
+
 def fmt_delta(epoch_target, now):
     """Formats a countdown to a Unix epoch timestamp, computed fresh against
     `now` every call -- accurate even if the surrounding data was cached

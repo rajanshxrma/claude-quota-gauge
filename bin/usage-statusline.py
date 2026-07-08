@@ -11,12 +11,13 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_delta, load_env_file  # noqa: E402
+from usage_common import pending_tasks_count, fmt_delta, load_env_file, version_lt  # noqa: E402
 
 load_env_file()
 
 SCRIPTS = os.path.expanduser("~/.claude/scripts")
 CACHE_PATH = os.path.join(SCRIPTS, "usage-live.json")
+MIN_VERSION = "2.1.80"
 
 
 def main():
@@ -30,7 +31,15 @@ def main():
     parts = []
 
     if not rate_limits:
-        parts.append("usage: unavailable (needs Claude Code >=2.1.80)")
+        # Only blame the CLI version when the payload actually confirms it's
+        # old -- an empty rate_limits can also mean "no API response yet this
+        # session" or a free-tier account, neither of which is a version
+        # problem. Never assert a cause we haven't verified.
+        cli_version = payload.get("version")
+        if cli_version and version_lt(cli_version, MIN_VERSION):
+            parts.append(f"usage: unavailable (Claude Code {cli_version} < {MIN_VERSION})")
+        else:
+            parts.append("usage: unavailable")
     else:
         cache = {"fetched_at": now.isoformat()}
         five_hour = rate_limits.get("five_hour") or {}

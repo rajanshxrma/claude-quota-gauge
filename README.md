@@ -15,7 +15,7 @@ your browser, touches an API key, or approximates anything — every number
 shown is the same one `claude.ai/settings/usage` would show you, because
 it's the same data, straight from Claude Code.
 
-![version](https://img.shields.io/badge/version-0.2.0-informational)
+![version](https://img.shields.io/badge/version-0.2.1-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
