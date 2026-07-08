@@ -1,6 +1,10 @@
 """Shared helpers for the statusline renderer, the SessionStart hook, and the
 background watcher."""
-import os
+import json, os, subprocess, sys
+from datetime import datetime
+
+FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.json")
+TOKENS_SINCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens-since.py")
 
 
 def load_env_file(path="~/.claude/usage-calibrator.env"):
@@ -53,6 +57,51 @@ def version_lt(a, b):
     except (ValueError, AttributeError):
         return False
     return a_parts < b_parts
+
+
+def fable_estimate(now, current_resets_at=None):
+    """Returns the estimated weekly % for the per-model pool Anthropic's real
+    rate_limits field doesn't break out (default: Fable) -- scaled from the
+    last manual calibration against claude.ai/settings/usage. This is the
+    one number in the tool that isn't verified reported Anthropic data, so
+    it always comes back with an explicit `stale` flag rather than a bare
+    number -- callers must never present it as fact when stale. Returns
+    None if it's never been calibrated at all."""
+    if not os.path.exists(FABLE_CAL_PATH):
+        return None
+    try:
+        with open(FABLE_CAL_PATH) as f:
+            cal = json.load(f)
+        next_reset = datetime.fromisoformat(cal["next_reset"])
+    except Exception:
+        return None
+
+    tracked_model = cal["tracked_model"]
+    stale = now > next_reset
+    if current_resets_at is not None and int(next_reset.timestamp()) != int(current_resets_at):
+        stale = True
+
+    if stale:
+        return {"tracked_model": tracked_model, "stale": True}
+
+    try:
+        tokens = json.loads(
+            subprocess.check_output(
+                [sys.executable, TOKENS_SINCE, cal["window_start"]], stderr=subprocess.DEVNULL
+            )
+        )
+    except Exception:
+        return {"tracked_model": tracked_model, "stale": True}
+
+    tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
+    pct = cal["pct"] * (tracked_now / cal["tokens_at_cal"]) if cal.get("tokens_at_cal") else cal["pct"]
+    pct = min(pct, 150)
+    return {
+        "tracked_model": tracked_model,
+        "stale": False,
+        "pct": pct,
+        "resets_at": int(next_reset.timestamp()),
+    }
 
 
 def fmt_delta(epoch_target, now):
