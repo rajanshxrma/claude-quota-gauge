@@ -81,7 +81,7 @@ def main():
     now = datetime.now(timezone.utc)
 
     if not os.path.exists(CAL_PATH):
-        print("No calibration yet -- run /usage-recalibrate to read real % from claude.ai/settings/usage.")
+        print("No calibration yet -- run /gauge-cali to read real % from claude.ai/settings/usage.")
         sys.exit(0)
 
     with open(CAL_PATH) as f:
@@ -106,7 +106,7 @@ def main():
         result["session_stale"] = False
     elif blocks:
         # New block since calibration -- no baseline to scale against
-        parts.append(f"5h: new block started, run /usage-recalibrate (resets {fmt_delta(blocks[0]['endTime'], now)})")
+        parts.append(f"5h: new block started, run /gauge-cali (resets {fmt_delta(blocks[0]['endTime'], now)})")
         result["session_stale"] = True
         result["session_new_block_start"] = blocks[0]["startTime"]
     else:
@@ -116,7 +116,7 @@ def main():
     # --- weekly ---
     wk = cal["weekly"]
     if now.isoformat() > wk["next_reset"]:
-        parts.append("week: rolled over, run /usage-recalibrate")
+        parts.append("week: rolled over, run /gauge-cali")
         result["weekly_stale"] = True
         result["weekly_stale_since"] = wk["next_reset"]
     else:
