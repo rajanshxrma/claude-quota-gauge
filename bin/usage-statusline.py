@@ -19,7 +19,7 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_delta, load_env_file, version_lt, fable_estimate  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate  # noqa: E402
 
 load_env_file()
 
@@ -56,11 +56,9 @@ def main():
         # bar still shows something useful; only report "unavailable" outright
         # when there's no prior cache to fall back on.
         if "five_hour_pct" in cache:
-            resets = fmt_delta(cache.get("five_hour_resets_at"), now)
-            parts.append(f"5h: {cache['five_hour_pct']:.0f}% (cached)" + (f", resets {resets}" if resets else ""))
+            parts.append(fmt_window("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"), now, cached=True))
         if "seven_day_pct" in cache:
-            resets = fmt_delta(cache.get("seven_day_resets_at"), now)
-            parts.append(f"week: {cache['seven_day_pct']:.0f}% (cached)" + (f", resets {resets}" if resets else ""))
+            parts.append(fmt_window("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"), now, cached=True))
 
         if not parts:
             # Only blame the CLI version when the payload actually confirms
@@ -80,16 +78,14 @@ def main():
         if "used_percentage" in five_hour:
             pct = five_hour["used_percentage"]
             resets_at = five_hour.get("resets_at")
-            resets = fmt_delta(resets_at, now)
-            parts.append(f"5h: {pct:.0f}%" + (f" (resets {resets})" if resets else ""))
+            parts.append(fmt_window("5h", pct, resets_at, now))
             cache["five_hour_pct"] = pct
             cache["five_hour_resets_at"] = resets_at
 
         if "used_percentage" in seven_day:
             pct = seven_day["used_percentage"]
             resets_at = seven_day.get("resets_at")
-            resets = fmt_delta(resets_at, now)
-            parts.append(f"week: {pct:.0f}%" + (f" (resets {resets})" if resets else ""))
+            parts.append(fmt_window("week", pct, resets_at, now))
             cache["seven_day_pct"] = pct
             cache["seven_day_resets_at"] = resets_at
 
@@ -102,8 +98,7 @@ def main():
             cache.pop("fable_pct", None)
             cache.pop("fable_resets_at", None)
         else:
-            resets = fmt_delta(fable["resets_at"], now)
-            parts.append(f"{fable['tracked_model']}: {fable['pct']:.0f}%" + (f" (resets {resets})" if resets else ""))
+            parts.append(fmt_window(fable["tracked_model"], fable["pct"], fable["resets_at"], now))
             cache["fable_pct"] = fable["pct"]
             cache["fable_resets_at"] = fable["resets_at"]
 
