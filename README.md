@@ -26,7 +26,7 @@ git clone https://github.com/rajanshxrma/claude-quota-gauge && cd claude-quota-g
 ```
 
 Then, once, read the three numbers off `claude.ai/settings/usage` and
-calibrate — inside Claude Code, run `/usage-recalibrate` (it drives the
+calibrate — inside Claude Code, run `/gauge-cali` (it drives the
 browser and does this for you), or by hand:
 
 ```bash
@@ -50,7 +50,7 @@ your %.
    weighting by list price is a much closer proxy for whatever compute-cost
    metric actually drives the limit.
 3. **Anchor once, manually.** There's no API for the real %, so you read it
-   off the settings page and run `/usage-recalibrate` — this is the one
+   off the settings page and run `/gauge-cali` — this is the one
    unavoidable manual step, not a missing feature.
 4. **Scale linearly from there.** Between calibrations, the estimate scales
    your cost-weighted local delta against the last real anchor.
@@ -62,7 +62,7 @@ your %.
 flowchart LR
     A["~/.claude/projects/**/*.jsonl"] --> B[tokens-since.py<br/>cost-weighted sum]
     B --> C[usage-estimate.py]
-    D["/usage-recalibrate<br/>(real % from claude.ai)"] --> E[usage-calibrate.py]
+    D["/gauge-cali<br/>(real % from claude.ai)"] --> E[usage-calibrate.py]
     E -->|writes anchor| F[(usage-calibration.json)]
     F --> C
     C --> G[SessionStart hook]
@@ -115,7 +115,7 @@ Run `/pending <what's parked>` to add one from inside a Claude Code session —
 it finds the right file (same resolution order as above), creates it from
 the template if it doesn't exist yet, and inserts your item as a new
 newest-on-top `## ` heading without touching anything already there.
-`install.sh` copies it to `~/.claude/commands/` alongside `/usage-recalibrate`.
+`install.sh` copies it to `~/.claude/commands/` alongside `/gauge-cali`.
 
 ## Optional: background watcher
 

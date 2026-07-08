@@ -30,7 +30,7 @@ if stale:
 else:
     context = (
         "Claude usage snapshot (calibrated estimate, not an official Anthropic figure -- "
-        f"recalibrate via /usage-recalibrate if it looks off): {line}"
+        f"recalibrate via /gauge-cali if it looks off): {line}"
     )
 
 print(json.dumps({

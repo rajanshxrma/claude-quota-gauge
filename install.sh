@@ -11,10 +11,10 @@ echo "Installing claude-quota-gauge..."
 mkdir -p "$SCRIPTS_DIR" "$COMMANDS_DIR"
 cp "$SCRIPT_DIR"/bin/* "$SCRIPTS_DIR/"
 chmod +x "$SCRIPTS_DIR"/*.py "$SCRIPTS_DIR"/*.sh
-cp "$SCRIPT_DIR"/commands/usage-recalibrate.md "$COMMANDS_DIR/"
+cp "$SCRIPT_DIR"/commands/gauge-cali.md "$COMMANDS_DIR/"
 cp "$SCRIPT_DIR"/commands/pending.md "$COMMANDS_DIR/"
 echo "  copied scripts to $SCRIPTS_DIR"
-echo "  copied /usage-recalibrate and /pending to $COMMANDS_DIR"
+echo "  copied /gauge-cali and /pending to $COMMANDS_DIR"
 
 if command -v ccusage >/dev/null 2>&1 || [ -x "$HOME/.npm-global/bin/ccusage" ]; then
   echo "  found ccusage"
@@ -68,6 +68,6 @@ else
 fi
 
 echo ""
-echo "Done. Next: open Claude Code and run /usage-recalibrate to read your real %"
+echo "Done. Next: open Claude Code and run /gauge-cali to read your real %"
 echo "from claude.ai/settings/usage and calibrate. See README.md for the optional"
 echo "background watcher (launchd/) and config (config/usage-calibrator.env.example)."
