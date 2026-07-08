@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-07-08
+
+### Fixed
+- The "unavailable" statusline message asserted `needs Claude Code >=2.1.80`
+  whenever `rate_limits` was missing from the payload, even when the running
+  version was current — an empty `rate_limits` can also mean no API response
+  has landed yet this session, not an outdated CLI. It now reads the
+  payload's own `version` field and only names the version as the cause when
+  that's actually verified; otherwise it reports "unavailable" with no
+  unverified blame attached.
+
 ## [0.2.0] - 2026-07-07
 
 ### Changed
