@@ -9,30 +9,22 @@ COMMANDS_DIR="$CLAUDE_DIR/commands"
 echo "Installing claude-quota-gauge..."
 
 mkdir -p "$SCRIPTS_DIR" "$COMMANDS_DIR"
-cp "$SCRIPT_DIR"/bin/* "$SCRIPTS_DIR/"
-chmod +x "$SCRIPTS_DIR"/*.py "$SCRIPTS_DIR"/*.sh
-cp "$SCRIPT_DIR"/commands/gauge-cali.md "$COMMANDS_DIR/"
+cp "$SCRIPT_DIR"/bin/*.py "$SCRIPTS_DIR/"
+chmod +x "$SCRIPTS_DIR"/*.py
 cp "$SCRIPT_DIR"/commands/pending.md "$COMMANDS_DIR/"
 echo "  copied scripts to $SCRIPTS_DIR"
-echo "  copied /gauge-cali and /pending to $COMMANDS_DIR"
-
-if command -v ccusage >/dev/null 2>&1 || [ -x "$HOME/.npm-global/bin/ccusage" ]; then
-  echo "  found ccusage"
-else
-  echo ""
-  echo "  ccusage not found on PATH. Install it with:"
-  echo "    npm install -g ccusage"
-  echo "  (the scripts fall back to 'npx ccusage@latest' if it's missing, but that's slower on every run)"
-fi
+echo "  copied /pending to $COMMANDS_DIR"
 
 echo ""
-read -r -p "Wire the SessionStart hook into ~/.claude/settings.json now? [Y/n] " REPLY
+read -r -p "Wire the statusline and SessionStart hook into ~/.claude/settings.json now? [Y/n] " REPLY
 REPLY="${REPLY:-Y}"
 if [[ "$REPLY" =~ ^[Yy] ]]; then
-  python3 - "$CLAUDE_DIR/settings.json" "$SCRIPTS_DIR/usage-session-hook.sh" <<'PYEOF'
+  python3 - "$CLAUDE_DIR/settings.json" \
+    "python3 $SCRIPTS_DIR/usage-statusline.py" \
+    "python3 $SCRIPTS_DIR/usage-session-hook.py" <<'PYEOF'
 import json, os, sys
 
-settings_path, hook_command = sys.argv[1], sys.argv[2]
+settings_path, statusline_command, hook_command = sys.argv[1], sys.argv[2], sys.argv[3]
 
 settings = {}
 if os.path.exists(settings_path):
@@ -42,8 +34,20 @@ if os.path.exists(settings_path):
         json.dump(settings, f, indent=2)
     print(f"  backed up existing settings to {settings_path}.bak")
 
+
 def normalize(cmd):
-    return os.path.abspath(os.path.expanduser(cmd))
+    return os.path.abspath(os.path.expanduser(cmd.split(" ", 1)[-1]))
+
+
+existing_statusline = settings.get("statusLine", {}).get("command")
+if not existing_statusline:
+    settings["statusLine"] = {"type": "command", "command": statusline_command, "refreshInterval": 60}
+    print(f"  set statusLine to {statusline_command}")
+elif normalize(existing_statusline) == normalize(statusline_command):
+    print("  statusLine already points here, left settings.json unchanged")
+else:
+    print(f"  statusLine already set to something else ({existing_statusline!r}) -- left it alone.")
+    print(f"    Add this yourself if you want ours: {{\"type\": \"command\", \"command\": \"{statusline_command}\", \"refreshInterval\": 60}}")
 
 hooks = settings.setdefault("hooks", {})
 session_start = hooks.setdefault("SessionStart", [])
@@ -58,16 +62,20 @@ if already_present:
     print("  SessionStart hook already present, left settings.json unchanged")
 else:
     session_start.append({"hooks": [{"type": "command", "command": hook_command, "timeout": 15}]})
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
-    print(f"  added SessionStart hook to {settings_path}")
+    print(f"  added SessionStart hook: {hook_command}")
+
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
 PYEOF
 else
-  echo "  skipped. Add this to ~/.claude/settings.json yourself under hooks.SessionStart:"
-  echo '    { "hooks": [ { "type": "command", "command": "'"$SCRIPTS_DIR"'/usage-session-hook.sh", "timeout": 15 } ] }'
+  echo "  skipped. Add these to ~/.claude/settings.json yourself:"
+  echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
+  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ] }'
 fi
 
 echo ""
-echo "Done. Next: open Claude Code and run /gauge-cali to read your real %"
-echo "from claude.ai/settings/usage and calibrate. See README.md for the optional"
-echo "background watcher (launchd/) and config (config/usage-calibrator.env.example)."
+echo "Done. Open Claude Code -- the statusline shows your real 5h/weekly % as"
+echo "soon as it first renders (usually within a few seconds), read straight"
+echo "from Claude Code's own rate_limits data. No calibration step, nothing to"
+echo "run by hand. See README.md for the optional background watcher"
+echo "(launchd/) and config (config/usage-calibrator.env.example)."

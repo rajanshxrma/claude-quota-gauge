@@ -1,4 +1,4 @@
-usage-calibration.json
+usage-live.json
 usage-watch-state.json
 *.log
 __pycache__/
