@@ -12,7 +12,7 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import fmt_delta  # noqa: E402
+from usage_common import fmt_window  # noqa: E402
 
 SCRIPTS = os.path.expanduser("~/.claude/scripts")
 CACHE_PATH = os.path.join(SCRIPTS, "usage-live.json")
@@ -34,11 +34,9 @@ def main():
 
         parts = []
         if "five_hour_pct" in cache:
-            resets = fmt_delta(cache.get("five_hour_resets_at"), now)
-            parts.append(f"5h: {cache['five_hour_pct']:.0f}%" + (f" (resets {resets})" if resets else ""))
+            parts.append(fmt_window("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"), now))
         if "seven_day_pct" in cache:
-            resets = fmt_delta(cache.get("seven_day_resets_at"), now)
-            parts.append(f"week: {cache['seven_day_pct']:.0f}%" + (f" (resets {resets})" if resets else ""))
+            parts.append(fmt_window("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"), now))
 
         line = " | ".join(parts) if parts else "no rate limit data cached yet"
         context = f"Claude usage (real, from Claude Code's own rate_limits -- not estimated): {line}"
@@ -52,8 +50,7 @@ def main():
                 f"(viewing that page has no side effects)."
             )
         elif model and "fable_pct" in cache:
-            resets = fmt_delta(cache.get("fable_resets_at"), now)
-            context += f" | {model} weekly: {cache['fable_pct']:.0f}%" + (f" (resets {resets})" if resets else "")
+            context += " | " + fmt_window(f"{model} weekly", cache["fable_pct"], cache.get("fable_resets_at"), now)
 
     print(json.dumps({
         "hookSpecificOutput": {

@@ -23,7 +23,7 @@ backend; it's calibrated by hand against the real settings page and scaled
 locally between calibrations, but tracks closely enough that it's shown
 the same way as the two above it.
 
-![version](https://img.shields.io/badge/version-0.3.2-informational)
+![version](https://img.shields.io/badge/version-0.3.3-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)

@@ -107,15 +107,40 @@ def fable_estimate(now, current_resets_at=None):
 def fmt_delta(epoch_target, now):
     """Formats a countdown to a Unix epoch timestamp, computed fresh against
     `now` every call -- accurate even if the surrounding data was cached
-    a few minutes ago, since resets_at is an absolute point in time."""
+    a few minutes ago, since resets_at is an absolute point in time. Returns
+    None once the target has passed -- callers use that to switch to an
+    explicit "resetting" state (see fmt_window) instead of a countdown that
+    reads "now" forever."""
     if epoch_target is None:
         return None
     secs = int(epoch_target - now.timestamp())
     if secs <= 0:
-        return "now"
+        return None
+    if secs < 120:
+        # Sub-2-minute granularity so the last stretch before a reset counts
+        # down visibly (e.g. "42s") instead of sitting on "0h 0m" for up to a
+        # minute, which reads as a hang rather than an active countdown.
+        return f"{secs}s"
     h, rem = divmod(secs, 3600)
     m = rem // 60
     if h > 24:
         d, h = divmod(h, 24)
         return f"{d}d {h}h"
     return f"{h}h {m}m"
+
+
+def fmt_window(label, pct, resets_at, now, cached=False):
+    """Formats one usage row, e.g. '5h: 18% (resets 4h 58m)'. Once resets_at
+    has passed, the window has crossed its reset boundary server-side but a
+    fresh reading hasn't landed yet (nothing refreshes the % until the next
+    real rate_limits payload arrives) -- shown as an explicit 'resetting...'
+    state carrying the last known % instead of a stale countdown stuck at
+    "now", which is indistinguishable from the tool having hung."""
+    if resets_at is not None and (resets_at - now.timestamp()) <= 0:
+        return f"{label}: resetting... (was {pct:.0f}%)"
+    resets = fmt_delta(resets_at, now)
+    if cached:
+        tail = f" (cached), resets {resets}" if resets else " (cached)"
+    else:
+        tail = f" (resets {resets})" if resets else ""
+    return f"{label}: {pct:.0f}%{tail}"

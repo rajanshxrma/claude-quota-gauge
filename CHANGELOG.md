@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-07-08
+
+### Fixed
+- The countdown to a window's reset had two blind spots that both read as
+  "is this hung?": (1) the last minute before a reset showed a frozen
+  `0h 0m` instead of a visibly ticking countdown, and (2) the moment a
+  window's `resets_at` passed — whether from live `rate_limits` or the
+  0.3.2 cached fallback — nothing distinguished "actively resetting right
+  now" from a stale number sitting there indefinitely. Sub-2-minute
+  countdowns now show seconds (`resets 42s`), and any window past its
+  reset boundary shows an explicit `resetting... (was 18%)` state instead
+  of a countdown stuck on `now`. Applies to the statusline, the
+  SessionStart context line, and the per-model weekly row alike (new
+  shared `fmt_window()` helper in `usage_common.py`).
+
 ## [0.3.2] - 2026-07-08
 
 ### Fixed
