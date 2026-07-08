@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-07-08
+
+### Fixed
+- The statusline showed a bare `usage: unavailable` on renders where
+  `rate_limits` was momentarily empty — typically the very first render of
+  a new session, before Claude Code's first API turn populates it — even
+  though the last real numbers were sitting right there in the cache file.
+  Now falls back to the last cached `5h`/`week` percentages (labeled
+  `(cached)`) whenever `rate_limits` is empty but a prior cache exists;
+  only falls through to `unavailable` when there's truly no cache yet
+  (e.g. a fresh install's very first run).
+
 ## [0.3.1] - 2026-07-08
 
 ### Changed

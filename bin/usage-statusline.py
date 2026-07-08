@@ -49,15 +49,29 @@ def main():
             cache = {}
 
     if not rate_limits:
-        # Only blame the CLI version when the payload actually confirms it's
-        # old -- an empty rate_limits can also mean "no API response yet this
-        # session" or a free-tier account, neither of which is a version
-        # problem. Never assert a cause we haven't verified.
-        cli_version = payload.get("version")
-        if cli_version and version_lt(cli_version, MIN_VERSION):
-            parts.append(f"usage: unavailable (Claude Code {cli_version} < {MIN_VERSION})")
-        else:
-            parts.append("usage: unavailable")
+        # An empty rate_limits usually just means no API response has landed
+        # yet this render (e.g. the first statusline draw of a new session,
+        # before Claude Code's first turn) -- not a real outage. Fall back to
+        # the last cached real numbers instead of a bare "unavailable" so the
+        # bar still shows something useful; only report "unavailable" outright
+        # when there's no prior cache to fall back on.
+        if "five_hour_pct" in cache:
+            resets = fmt_delta(cache.get("five_hour_resets_at"), now)
+            parts.append(f"5h: {cache['five_hour_pct']:.0f}% (cached)" + (f", resets {resets}" if resets else ""))
+        if "seven_day_pct" in cache:
+            resets = fmt_delta(cache.get("seven_day_resets_at"), now)
+            parts.append(f"week: {cache['seven_day_pct']:.0f}% (cached)" + (f", resets {resets}" if resets else ""))
+
+        if not parts:
+            # Only blame the CLI version when the payload actually confirms
+            # it's old -- an empty rate_limits with no cache can also mean a
+            # free-tier account, neither of which is a version problem. Never
+            # assert a cause we haven't verified.
+            cli_version = payload.get("version")
+            if cli_version and version_lt(cli_version, MIN_VERSION):
+                parts.append(f"usage: unavailable (Claude Code {cli_version} < {MIN_VERSION})")
+            else:
+                parts.append("usage: unavailable")
     else:
         cache["fetched_at"] = now.isoformat()
         five_hour = rate_limits.get("five_hour") or {}
