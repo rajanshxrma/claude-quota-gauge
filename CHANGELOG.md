@@ -4,13 +4,34 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-07
 
 ### Changed
+- **Replaced the entire cost-weighted local estimate and manual calibration
+  mechanism** with Claude Code's own `rate_limits` field, which the
+  statusline command has been fed on stdin since Claude Code v2.1.80. Every
+  number shown is now the real Anthropic-reported percentage, not an
+  estimate — no browser scraping, no stored credentials, no anchor to drift
+  between calibrations.
+- `SessionStart` hook now just relays the last real numbers the statusline
+  cached, instead of self-recalibrating via the browser tool — there's
+  nothing left to calibrate.
 - README demo swapped from a static SVG to an animated recording of a real
   session — `/pending` parking an item, and the next session's snapshot
   picking up the new count.
-- Renamed `/usage-recalibrate` to `/gauge-cali`.
+
+### Removed
+- `/usage-recalibrate` (and its later rename, `/gauge-cali`) — recalibration
+  no longer exists as a concept.
+- The `ccusage` dependency, `tokens-since.py`, `usage-calibrate.py`, and
+  `usage-calibration.json` — the whole cost-weighting/anchor pipeline.
+- The per-model tracked weekly % (e.g. "week fable: 94%") — Anthropic
+  doesn't expose that breakdown through `rate_limits` or anywhere else, so
+  it's gone rather than kept as a guess. Only the two real, verifiable
+  numbers (5-hour, weekly all-models) are shown.
+- `CLAUDE_USAGE_TRACK_MODEL`, `CLAUDE_USAGE_RESET_DAY`, `CLAUDE_USAGE_RESET_HOUR`,
+  `CLAUDE_USAGE_RESET_TZ`, `CCUSAGE` config variables — no longer meaningful
+  now that reset times come from `rate_limits` directly.
 
 ## [0.1.0] - 2026-07-07
 
