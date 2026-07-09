@@ -192,7 +192,7 @@ def fmt_window(label, pct, resets_at, now, cached=False):
         return f"{label}: resetting... (was {pct:.0f}%)"
     resets = fmt_delta(resets_at, now)
     if cached:
-        tail = f" (cached), resets {resets}" if resets else " (cached)"
+        tail = f" (cached, auto-updates shortly), resets {resets}" if resets else " (cached, auto-updates shortly)"
     else:
         tail = f" (resets {resets})" if resets else ""
     return f"{label}: {pct:.0f}%{tail}"
