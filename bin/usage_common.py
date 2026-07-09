@@ -104,6 +104,58 @@ def fable_estimate(now, current_resets_at=None):
     }
 
 
+def resolve_configured_model(cwd):
+    """Best-effort lookup of the `model` setting governing this session
+    (e.g. "opusplan"), checked project-local first then user-global -- the
+    same precedence Claude Code itself uses, minus the CLI-flag/env-var
+    layers this script has no visibility into. Returns None if unset
+    anywhere, in which case the caller just shows the live model as-is."""
+    candidates = []
+    if cwd:
+        candidates.append(os.path.join(cwd, ".claude", "settings.local.json"))
+        candidates.append(os.path.join(cwd, ".claude", "settings.json"))
+    candidates.append(os.path.expanduser("~/.claude/settings.json"))
+    for path in candidates:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if "model" in data:
+            return data["model"]
+    return None
+
+
+def fmt_model(payload):
+    """Formats the current session's active model + reasoning effort, e.g.
+    'opusplan→Sonnet 5 (high)' or 'Fable 5 (xhigh/fast)'. Pulled straight
+    from the statusLine stdin payload (real per-render data, same principle
+    as the rate_limits numbers above) rather than inferred from settings
+    alone -- opusplan mode alternates the live model between Opus (plan
+    phase) and Sonnet (execution), so only the payload's own model.id/
+    display_name reflects which one is actually active right now. The
+    "opusplan" tag is layered on top from settings so it reads as a mode,
+    not just whichever sub-model happens to be live at that instant."""
+    model_info = payload.get("model") or {}
+    display = model_info.get("display_name") or model_info.get("id")
+    if not display:
+        return None
+
+    cwd = payload.get("cwd") or (payload.get("workspace") or {}).get("current_dir")
+    configured = resolve_configured_model(cwd)
+    label = f"opusplan→{display}" if configured == "opusplan" else display
+
+    tags = []
+    effort = (payload.get("effort") or {}).get("level")
+    if effort:
+        tags.append(effort)
+    if payload.get("fast_mode"):
+        tags.append("fast")
+    if tags:
+        label += f" ({'/'.join(tags)})"
+    return label
+
+
 def fmt_delta(epoch_target, now):
     """Formats a countdown to a Unix epoch timestamp, computed fresh against
     `now` every call -- accurate even if the surrounding data was cached

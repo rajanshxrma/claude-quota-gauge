@@ -14,12 +14,19 @@ usage-calibrate-fable.py) -- shown without a separate confidence label
 since it tracks closely (rajan's own tolerance: within ~1%), but it still
 reports itself as stale rather than a silently wrong number once the
 weekly window rolls over without a fresh calibration.
+
+Leads with the current session's own active model + reasoning effort
+(e.g. "opusplan→Sonnet 5 (high)"), read live from the same stdin payload
+(model.id/display_name, effort.level, fast_mode -- see fmt_model() in
+usage_common.py). Since Claude Code invokes this command separately per
+open session, each terminal's bar reflects only its own session -- no
+extra bookkeeping needed to keep multiple concurrent sessions straight.
 """
 import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model  # noqa: E402
 
 load_env_file()
 
@@ -37,6 +44,10 @@ def main():
 
     rate_limits = payload.get("rate_limits") or {}
     parts = []
+
+    model_part = fmt_model(payload)
+    if model_part:
+        parts.append(model_part)
 
     # Load whatever was last cached so a transient miss below never wipes
     # out the last-known-real numbers or the fable calibration state.
