@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-09
+
+### Added
+- The statusline now leads with the current session's own active model and
+  reasoning effort (e.g. `opusplan→Sonnet 5 (high)`, `Fable 5 (xhigh/fast)`),
+  read from the `model`, `effort`, and `fast_mode` fields Claude Code already
+  includes in the statusLine stdin payload. New `fmt_model()` /
+  `resolve_configured_model()` helpers in `usage_common.py`. Since Claude
+  Code invokes the statusline command separately per open session, this
+  works out of the box across multiple concurrent terminals/tabs each on a
+  different model or effort level, with no extra bookkeeping.
+
 ## [0.3.3] - 2026-07-08
 
 ### Fixed

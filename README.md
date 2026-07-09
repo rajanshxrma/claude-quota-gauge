@@ -23,7 +23,7 @@ backend; it's calibrated by hand against the real settings page and scaled
 locally between calibrations, but tracks closely enough that it's shown
 the same way as the two above it.
 
-![version](https://img.shields.io/badge/version-0.3.3-informational)
+![version](https://img.shields.io/badge/version-0.4.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -76,6 +76,22 @@ flowchart LR
     D --> F[usage-watch.py]
     F -->|crosses threshold| G[macOS notification]
 ```
+
+## Model + effort in the bar
+
+Every statusline render also leads with the current session's own active
+model and reasoning effort — e.g. `opusplan→Sonnet 5 (high)` or `Fable 5
+(xhigh/fast)` — read straight from the same stdin payload (`model.id`/
+`display_name`, `effort.level`, `fast_mode`). If your `model` setting is
+`opusplan`, that mode alternates the live model between Opus (plan phase)
+and Sonnet (execution); the bar tags it as `opusplan→` on top of whichever
+sub-model is actually live at that render, so the mode stays visible even
+as the underlying model flips.
+
+Claude Code invokes the statusline command separately per open session, so
+if you have several terminals/tabs open on different models or effort
+levels, each one's bar reflects only its own session — nothing to
+configure to keep them straight.
 
 ## Configuration
 
