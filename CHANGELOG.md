@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-07-10
+
+### Fixed
+- The `opusplan→` model tag no longer renders impossible combinations like
+  `opusplan→Fable 5`. The tag was applied whenever the `model` setting on
+  disk said `opusplan`, without checking whether the live model was one
+  opusplan can actually produce — so a session-level `/model` override to
+  any other model still got tagged. The prefix now only appears when the
+  payload's live model is Opus or Sonnet, the two sub-models opusplan
+  alternates between. (An override to Opus or Sonnet themselves is
+  indistinguishable from opusplan in the payload, so the tag can still
+  show in that narrow case.)
+
 ## [0.5.0] - 2026-07-10
 
 ### Changed
