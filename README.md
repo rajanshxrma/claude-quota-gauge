@@ -23,7 +23,7 @@ backend; it's calibrated by hand against the real settings page once to
 derive a weekly cap, then projected live from local usage against that cap,
 but tracks closely enough that it's shown the same way as the two above it.
 
-![version](https://img.shields.io/badge/version-0.5.0-informational)
+![version](https://img.shields.io/badge/version-0.5.1-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -86,7 +86,11 @@ model and reasoning effort — e.g. `opusplan→Sonnet 5 (high)` or `Fable 5
 `opusplan`, that mode alternates the live model between Opus (plan phase)
 and Sonnet (execution); the bar tags it as `opusplan→` on top of whichever
 sub-model is actually live at that render, so the mode stays visible even
-as the underlying model flips.
+as the underlying model flips. The tag only appears when the live model is
+one opusplan can actually produce (Opus or Sonnet) — a session-level
+`/model` override to anything else takes that session out of opusplan mode,
+and the bar shows the override bare rather than an impossible combination
+like `opusplan→Fable 5`.
 
 Claude Code invokes the statusline command separately per open session, so
 if you have several terminals/tabs open on different models or effort

@@ -230,7 +230,16 @@ def fmt_model(payload):
     phase) and Sonnet (execution), so only the payload's own model.id/
     display_name reflects which one is actually active right now. The
     "opusplan" tag is layered on top from settings so it reads as a mode,
-    not just whichever sub-model happens to be live at that instant."""
+    not just whichever sub-model happens to be live at that instant.
+
+    The prefix only applies when the live model is one opusplan can
+    actually produce (Opus or Sonnet). A session-level /model override to
+    anything else (e.g. Fable) leaves the settings pin in place but takes
+    this session out of opusplan mode entirely -- the payload is the only
+    place that override is visible, and without this check the bar renders
+    an impossible "opusplan→Fable 5". An override to Opus or Sonnet
+    themselves is indistinguishable from opusplan in the payload, so the
+    prefix can still show in that narrow case."""
     model_info = payload.get("model") or {}
     display = model_info.get("display_name") or model_info.get("id")
     if not display:
@@ -238,7 +247,9 @@ def fmt_model(payload):
 
     cwd = payload.get("cwd") or (payload.get("workspace") or {}).get("current_dir")
     configured = resolve_configured_model(cwd)
-    label = f"opusplan→{display}" if configured == "opusplan" else display
+    model_key = f"{model_info.get('id') or ''} {display}".lower()
+    in_opusplan = configured == "opusplan" and ("opus" in model_key or "sonnet" in model_key)
+    label = f"opusplan→{display}" if in_opusplan else display
 
     tags = []
     effort = (payload.get("effort") or {}).get("level")
