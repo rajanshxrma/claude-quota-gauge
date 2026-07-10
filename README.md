@@ -23,7 +23,7 @@ backend; it's calibrated by hand against the real settings page once to
 derive a weekly cap, then projected live from local usage against that cap,
 but tracks closely enough that it's shown the same way as the two above it.
 
-![version](https://img.shields.io/badge/version-0.5.1-informational)
+![version](https://img.shields.io/badge/version-0.6.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -97,6 +97,14 @@ if you have several terminals/tabs open on different models or effort
 levels, each one's bar reflects only its own session — nothing to
 configure to keep them straight.
 
+## Resuming a session from the bar
+
+The bar also trails with this session's own full `session_id` (the same
+stdin payload carries it), e.g. `session: 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`.
+If a long-running session gets close to a usage limit, copy that ID and run
+`claude --resume <id>` in a fresh terminal window to pick it back up —
+`--resume` needs the whole UUID, so a shortened prefix won't work.
+
 ## Configuration
 
 Copy `config/usage-calibrator.env.example` to `~/.claude/usage-calibrator.env`
@@ -109,6 +117,7 @@ see your shell profile.
 | `CLAUDE_USAGE_PENDING_FILE` | `./PENDING.md`, then `~/.claude/PENDING.md` | See the PENDING.md convention below |
 | `CLAUDE_USAGE_TRACK_MODEL` | `fable` | Which model gets the optional calibrated weekly tracking — see below |
 | `CLAUDE_USAGE_ALERT_THRESHOLD` | `85` | % that triggers a desktop notification |
+| `CLAUDE_USAGE_THEME_WATCH` | unset (off) | macOS-only: flags UI theme staleness in the background — see below |
 
 ## The PENDING.md convention
 
@@ -172,6 +181,26 @@ stale, or occasionally to re-verify the cap — Claude does this on its own
 once told to, since viewing a settings page has no side effects. A 0%
 reading can't derive a cap (nothing used yet to calibrate against), so it
 keeps whatever cap is already on file rather than discarding it.
+
+## Optional: UI theme staleness (macOS only)
+
+Claude Code's light/dark theme resolves once when a session launches and is
+never hot-reloaded — if your OS appearance flips while a session sits open
+(sleep/wake, a scheduled Dark Mode switch, or you just change it), that
+session's colors silently go stale with no visible signal, and no external
+process can re-apply the theme for you. The only supported mid-session fix
+is running `/config theme=auto` yourself.
+
+This add-on can't change that — nothing can — but it can catch the drift.
+Set `CLAUDE_USAGE_THEME_WATCH=1` and a `UserPromptSubmit` hook
+(`bin/theme-watch-prompt-hook.py`, wired by `install.sh`) checks the real OS
+appearance against what the session's theme actually launched under, and
+tells Claude in the background — never in the visible statusline bar — the
+first time it notices a mismatch, so it can flag it to you unprompted. It
+re-arms if the OS flips again, and stays quiet once the appearance matches
+what the session launched under (or the session restarts) — there's no way
+to see whether `/config theme=auto` actually ran, so it never assumes a fix
+happened it can't verify.
 
 ## Optional: background watcher
 

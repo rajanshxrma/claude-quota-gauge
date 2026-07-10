@@ -199,6 +199,139 @@ def fable_estimate(now, current_resets_at=None):
     }
 
 
+THEME_STATE_PATH = os.path.expanduser("~/.claude/scripts/theme-state.json")
+# How long a session's drift-tracking entry survives with no prompts
+# touching it -- long enough to outlive a normal Claude Code session, short
+# enough that abandoned/killed sessions don't pile up in the state file
+# forever.
+THEME_STATE_MAX_AGE = timedelta(hours=24)
+
+
+def theme_watch_enabled():
+    """Off by default -- this whole feature is a macOS-only `defaults read`
+    dependency, exactly the kind of fragile platform-specific add-on that
+    shouldn't be forced on every user of this cross-platform tool. Opt in
+    per-machine via CLAUDE_USAGE_THEME_WATCH=1 in
+    ~/.claude/usage-calibrator.env."""
+    return os.environ.get("CLAUDE_USAGE_THEME_WATCH") == "1"
+
+
+def os_appearance():
+    """Returns "dark" / "light" for the current macOS system appearance, or
+    None on any non-macOS platform or read failure -- callers must treat
+    None as "can't tell, don't report drift" rather than assuming a value.
+    There is no supported way for Claude Code itself to expose this (the
+    statusLine JSON schema has no theme/appearance field), so this reads
+    the same OS-level source of truth a human would check by eye."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(
+            ["defaults", "read", "-g", "AppleInterfaceStyle"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except Exception:
+        return None
+    # Exit code is nonzero with empty stdout when the key is simply absent --
+    # that's the normal, expected way macOS represents "light mode", not an
+    # error. Anything else unreadable stays None (unknown) rather than
+    # guessing.
+    if out.returncode == 0 and "dark" in out.stdout.lower():
+        return "dark"
+    if out.returncode != 0 and not out.stdout.strip():
+        return "light"
+    return None
+
+
+def _load_theme_state():
+    if not os.path.exists(THEME_STATE_PATH):
+        return {}
+    try:
+        with open(THEME_STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_theme_state(state, now):
+    # Prune entries this stale so a long-lived machine doesn't accumulate one
+    # row per session forever.
+    cutoff = now - THEME_STATE_MAX_AGE
+    pruned = {
+        sid: entry for sid, entry in state.items()
+        if datetime.fromisoformat(entry.get("last_seen", now.isoformat())) > cutoff
+    }
+    os.makedirs(os.path.dirname(THEME_STATE_PATH), exist_ok=True)
+    with open(THEME_STATE_PATH, "w") as f:
+        json.dump(pruned, f)
+
+
+def _theme_state_entry(session_id, now):
+    """Loads (state, entry) for a session, creating a fresh entry baselined
+    to the current OS appearance on first sight -- that appearance is what
+    this session's theme actually resolved against at launch, since Claude
+    Code queries it once at startup and never again (no settings.json
+    hot-reload, no statusLine/hook field exposing the live resolved theme).
+    Returns (state, entry, current_appearance), any of which may be None if
+    theme-watch is off, session_id is missing, or the OS appearance can't be
+    read right now."""
+    if not theme_watch_enabled() or not session_id:
+        return None, None, None
+    current = os_appearance()
+    if current is None:
+        return None, None, None
+
+    state = _load_theme_state()
+    now_iso = now.isoformat()
+    entry = state.get(session_id)
+    if entry is None:
+        entry = {"baseline": current, "announced_for": None, "first_seen": now_iso, "last_seen": now_iso}
+        state[session_id] = entry
+        _save_theme_state(state, now)
+    return state, entry, current
+
+
+def theme_drift_to_announce(session_id, now):
+    """Reports whether the OS appearance has diverged from the appearance
+    this session's theme actually resolved against at launch, for the
+    UserPromptSubmit hook to relay into Claude's context -- entirely a
+    background check, never surfaced in the visible statusline bar.
+
+    Dedups so Claude is told about a given drift event exactly once (not
+    spammed every prompt), tracked via `announced_for`; re-arms the moment
+    the OS flips again, including flipping back and then away once more.
+    The underlying baseline itself never moves mid-session -- there's no way
+    to observe that `/config theme=auto` actually ran, so nothing here
+    assumes it did. It only clears two honest ways: the OS appearance flips
+    back to match what the theme actually launched under (genuinely no
+    longer stale, so `announced_for` resets too), or the session restarts
+    (fresh baseline captured at the new launch). Returns None if
+    theme-watch is off, session_id is missing, the OS appearance can't be
+    read, or there's nothing new to announce."""
+    state, entry, current = _theme_state_entry(session_id, now)
+    if entry is None:
+        return None
+
+    entry["last_seen"] = now.isoformat()
+    baseline = entry["baseline"]
+
+    if baseline == current:
+        entry["announced_for"] = None
+        state[session_id] = entry
+        _save_theme_state(state, now)
+        return None
+
+    if entry.get("announced_for") == current:
+        state[session_id] = entry
+        _save_theme_state(state, now)
+        return None
+
+    entry["announced_for"] = current
+    state[session_id] = entry
+    _save_theme_state(state, now)
+    return {"drifted": True, "from": baseline, "to": current}
+
+
 def resolve_configured_model(cwd):
     """Best-effort lookup of the `model` setting governing this session
     (e.g. "opusplan"), checked project-local first then user-global -- the
@@ -298,7 +431,44 @@ def fmt_window(label, pct, resets_at, now, cached=False):
         return f"{label}: resetting... (was {pct:.0f}%)"
     resets = fmt_delta(resets_at, now)
     if cached:
-        tail = f" (cached, auto-updates shortly), resets {resets}" if resets else " (cached, auto-updates shortly)"
+        tail = f" (refreshing…), resets {resets}" if resets else " (refreshing…)"
     else:
         tail = f" (resets {resets})" if resets else ""
     return f"{label}: {pct:.0f}%{tail}"
+
+
+RIGHT_ALIGN_MARGIN = 4
+# Claude Code's actual renderable row width runs a few columns short of the
+# raw COLUMNS value it reports -- confirmed live: padding to exactly COLUMNS
+# clipped exactly 4 characters off the trailing session id, so the
+# statusline row itself reserves that much width, likely for its own UI
+# border/padding (the docs' `padding` setting describes this as "the
+# interface's built-in spacing", separate from anything a script controls).
+# Set to the measured value rather than a rounder guess, since any less
+# reproduces that exact clip and any more is just unused blank space.
+
+
+def right_align(left, right):
+    """Right-justifies `right` against the live terminal width so it reads as
+    its own cluster near the far edge of the bar (e.g. the session id)
+    rather than just trailing immediately after the last `|`-joined segment
+    on the left. Claude Code sets the COLUMNS env var to the terminal's
+    current width before running the statusLine command (v2.1.153+) -- this
+    pads between `left` and `right` to fill it, short of the true edge by
+    RIGHT_ALIGN_MARGIN (see above). Falls back to a plain `left | right`
+    join (the pre-right-align behavior) when COLUMNS isn't set (older
+    Claude Code) or the terminal is too narrow for both to fit side by
+    side."""
+    if not right:
+        return left
+    if not left:
+        return right
+    try:
+        columns = int(os.environ.get("COLUMNS", ""))
+    except ValueError:
+        columns = None
+    if columns:
+        pad = columns - RIGHT_ALIGN_MARGIN - len(left) - len(right)
+        if pad >= 1:
+            return left + " " * pad + right
+    return f"{left} | {right}"
