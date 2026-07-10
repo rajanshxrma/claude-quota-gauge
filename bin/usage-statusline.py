@@ -9,11 +9,13 @@ latest known real values without needing stdin themselves.
 
 It also surfaces one more number alongside the two real ones: a per-model
 weekly % (default Fable) that rate_limits doesn't expose at all. That
-figure is scaled from local token deltas against a manual calibration (see
-usage-calibrate-fable.py) -- shown without a separate confidence label
-since it tracks closely (rajan's own tolerance: within ~1%), but it still
-reports itself as stale rather than a silently wrong number once the
-weekly window rolls over without a fresh calibration.
+figure is projected from cost-weighted local token usage against a weekly
+$ cap derived at the last real calibration (see usage-calibrate-fable.py
+and fable_estimate() in usage_common.py) -- shown without a separate
+confidence label since it tracks closely (rajan's own tolerance: within
+~1%), but it still reports itself as stale rather than a silently wrong
+number whenever no real cap has been established, the cap needs
+re-verifying, or the local projection blows past a sane ceiling.
 
 Leads with the current session's own active model + reasoning effort
 (e.g. "opusplan→Sonnet 5 (high)"), read live from the same stdin payload
