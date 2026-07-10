@@ -4,6 +4,85 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-10
+
+### Changed
+- Fable (or whatever `CLAUDE_USAGE_TRACK_MODEL` is set to) weekly tracking
+  switched from a ratio-scaling model to an absolute weekly-cap model. The
+  old model remembered a calibrated `%` and re-scaled it on every read by
+  the ratio of local token deltas (`pct = cal_pct * tokens_now /
+  tokens_at_cal`) — accurate right after a calibration, but drifting
+  between them with no ground truth, and needing a tight staleness ceiling
+  to bound how far that drift could go unnoticed. The new model derives a
+  weekly `$` cap once from a real, non-zero read (`cap = tokens_at_cal /
+  (pct/100)`), then projects live local usage against that fixed cap on
+  every statusline render — the number moves in near-real-time as usage
+  accrues, the same way the two real `rate_limits` numbers do, without
+  needing a fresh calibration to move at all.
+- The weekly window now advances itself at the real reset boundary with no
+  browser read needed: it prefers `rate_limits.seven_day.resets_at`
+  (ground truth — the tracked model's pool resets in lockstep with the
+  all-models weekly) when available, else steps forward in 7-day
+  increments from the last known boundary. The projection naturally reads
+  ~0% right after a rollover instead of requiring a fresh calibration to
+  notice one happened.
+- Staleness ceiling relaxed from a hard 6 hours (`FABLE_MAX_CAL_AGE`) to a
+  ~14-day cap-re-verification window (`CAP_MAX_AGE`), since the cap itself
+  is slow-moving (Anthropic's weekly limit rarely changes) unlike the old
+  model's moving anchor, which needed frequent re-anchoring to stay
+  trustworthy. Added an explicit projection ceiling (~120%): if local usage
+  projects past that against the cap, it's reported stale rather than a
+  number nobody would believe, since that's a sign the cap itself has
+  drifted from reality.
+- A calibration read of exactly 0% can't derive a cap (nothing used yet to
+  calibrate a denominator against) — it now updates the window/reset
+  bookkeeping but deliberately keeps whatever cap is already on file,
+  instead of discarding a good cap just because one particular read landed
+  at zero.
+- Before any cap has ever been derived (fresh install, or every read so
+  far has landed at 0%), the statusline no longer shows an alarming
+  `fable: stale, run /gauge-cali-fable` message. It shows the honest
+  number instead — `0%`, since that's the only way a cap couldn't be
+  derived — the same graceful-fallback principle the 5-hour/weekly-all
+  numbers already use (v0.3.2: fall back to a known real number instead of
+  an "unavailable" message whenever one is available). But only for as
+  long as `0%` stays true: the moment local transcripts show tracked-model
+  usage beyond what was on file at that 0% read, there's nothing to
+  project it against, so it reports stale — which triggers the standard
+  auto-recalibration, and that first non-zero read derives the cap and
+  makes the number fully live from then on. Without that guard, the
+  friendly `0%` would sit frozen while real usage climbed — the same
+  freeze bug this release kills, in friendlier clothes. `stale` otherwise
+  remains reserved for genuine drift risk once a cap *does* exist: too old
+  to trust, or a live projection so far past it that the cap itself looks
+  wrong. Relaxing those the same way would have resurrected the exact
+  silent-drift bug (showing 99% when the real number was 0%) v0.4.1 was
+  built to catch, so they still report staleness plainly.
+
+### Added
+- `usage-watch.py` now appends each distinct cached snapshot to a
+  persistent history log (`~/.claude/usage-history.jsonl`), piggybacking on
+  its existing 15-minute launchd cadence rather than adding a second
+  scheduled job.
+- `usage-watch.py` now also fires a native notification when the tracked
+  model's estimate itself goes stale (not just threshold crossings),
+  deduped per calibration so it renotifies once per stale state and again
+  after the next recalibration — this closes a real gap where a stale
+  estimate could sit silently for hours with no session open to notice via
+  the statusline.
+
+### Fixed
+- Calibrating at exactly 0% used to freeze the Fable estimate at 0% for
+  the rest of the week: the old ratio model multiplied by the calibrated
+  `%`, so a `0` anchor could never project any growth as usage
+  accrued — the opposite of what a live estimate should do. The absolute-
+  cap model has no such freeze; it isn't built on `pct` as a live
+  multiplier, only as provenance for how the cap was derived.
+- The calibration JSON gains `cap` / `cap_derived_at` fields; `pct` is now
+  kept purely as a record of the last real read, not used as a live
+  multiplier. If anything downstream reads the old ratio-model assumption
+  (that `pct` alone determines the live number), that's why it changed.
+
 ## [0.4.0] - 2026-07-09
 
 ### Added

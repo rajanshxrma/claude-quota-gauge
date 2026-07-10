@@ -3,11 +3,26 @@
 `rate_limits` field doesn't expose -- Anthropic's real backend reports one
 aggregate weekly %, not a per-model breakdown, even though
 claude.ai/settings/usage itself shows a separate row for models with their
-own pool (e.g. Fable). This is the one number this tool shows that isn't
-pulled straight from rate_limits -- it's calibrated by hand against that
-settings page and scaled locally between calibrations. It reports
-staleness once the weekly window rolls over without a fresh calibration,
-rather than showing a number scaled against a window that's already ended.
+own pool (e.g. Fable).
+
+Absolute-cap model (2026-07-10): rather than remembering this % and scaling
+it by a token ratio on every read (the old model -- see CHANGELOG for why
+that froze at 0% and needed constant re-anchoring), this derives a weekly
+$ cap in the same cost-weighted units tokens-since.py already produces:
+
+    cap = tokens_at_cal / (pct / 100)
+
+Once a cap exists, usage_common.fable_estimate() projects it against live
+local usage on every read -- no further calibration needed except to
+occasionally re-verify the cap hasn't drifted (see CAP_MAX_AGE), and the
+weekly window advances on its own at the real reset boundary with no
+browser read needed.
+
+A read of exactly 0% can't derive a cap (division by zero -- there's
+nothing used yet to calibrate a denominator against), so a 0% calibration
+updates the window/reset bookkeeping but deliberately keeps whatever cap
+was already on file, rather than discarding a good cap just because this
+particular read happened to land at zero.
 
 Anchors the weekly window to Claude Code's real reported reset time (cached
 by the last statusline render in usage-live.json) instead of a guessed
@@ -62,14 +77,36 @@ def main():
     )
     tracked_tokens = sum(v for k, v in tokens.items() if TRACK_MODEL.lower() in k.lower())
 
+    now = datetime.now(timezone.utc)
     cal = {
-        "calibrated_at": datetime.now(timezone.utc).isoformat(),
+        "calibrated_at": now.isoformat(),
         "tracked_model": TRACK_MODEL,
         "pct": pct,
         "window_start": window_start.isoformat(),
         "next_reset": next_reset.isoformat(),
         "tokens_at_cal": tracked_tokens,
     }
+
+    if pct > 0:
+        # A real non-zero read gives an actual denominator -- derive
+        # (or refresh, if re-verifying) the weekly cap from it.
+        cal["cap"] = tracked_tokens / (pct / 100)
+        cal["cap_derived_at"] = now.isoformat()
+    else:
+        # Can't derive a cap from a 0% read -- carry forward whatever cap
+        # is already on file (if any) instead of discarding it.
+        prior_cap, prior_cap_derived_at = None, None
+        if os.path.exists(CAL_PATH):
+            try:
+                with open(CAL_PATH) as f:
+                    prior = json.load(f)
+                prior_cap = prior.get("cap")
+                prior_cap_derived_at = prior.get("cap_derived_at")
+            except Exception:
+                pass
+        cal["cap"] = prior_cap
+        cal["cap_derived_at"] = prior_cap_derived_at
+
     with open(CAL_PATH, "w") as f:
         json.dump(cal, f, indent=2)
     print(f"Fable calibration written to {CAL_PATH}")

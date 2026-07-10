@@ -1,10 +1,25 @@
 """Shared helpers for the statusline renderer, the SessionStart hook, and the
 background watcher."""
 import json, os, subprocess, sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.json")
 TOKENS_SINCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens-since.py")
+# Absolute-cap model (replaced the old ratio-scaling model 2026-07-10): a
+# calibration derives a weekly $ cap (tokens_at_cal / (pct/100)) instead of
+# remembering a % to scale. The cap is slow-moving -- Anthropic's weekly
+# limit rarely changes -- so it only needs occasional re-verification, not
+# a tight hours-long ceiling. This also fixed a real bug in the old model:
+# calibrating at exactly 0% (pct=0) froze the ratio-scaled estimate at 0%
+# forever, since it multiplied by cal["pct"]. The cap model has no such
+# freeze -- it projects live local usage against a fixed denominator.
+CAP_MAX_AGE = timedelta(days=14)
+# Local projections aren't ground truth -- if the cost-weighted local
+# estimate blows past a sane ceiling, that's a sign the cap itself has
+# drifted from reality (e.g. Anthropic adjusted the limit), not that Fable
+# usage is actually >120% of the weekly pool. Report stale rather than a
+# number nobody would believe.
+PROJECTION_CEILING = 120
 
 
 def load_env_file(path="~/.claude/usage-calibrator.env"):
@@ -60,13 +75,39 @@ def version_lt(a, b):
 
 
 def fable_estimate(now, current_resets_at=None):
-    """Returns the estimated weekly % for the per-model pool Anthropic's real
-    rate_limits field doesn't break out (default: Fable) -- scaled from the
-    last manual calibration against claude.ai/settings/usage. This is the
-    one number in the tool that isn't verified reported Anthropic data, so
-    it always comes back with an explicit `stale` flag rather than a bare
-    number -- callers must never present it as fact when stale. Returns
-    None if it's never been calibrated at all."""
+    """Returns the live weekly % for the per-model pool Anthropic's real
+    rate_limits field doesn't break out (default: Fable) -- projected from a
+    weekly $ cap derived at the last real calibration against
+    claude.ai/settings/usage, against cost-weighted local usage since the
+    window started (see tokens-since.py). This is the one number in the
+    tool that isn't verified reported Anthropic data, so it always comes
+    back with an explicit `stale` flag rather than a bare number -- callers
+    must never present it as fact when stale. Returns None if it's never
+    been calibrated at all.
+
+    Unlike the 5h/weekly-all numbers (which come free from rate_limits on
+    every render), this needs the cap to have been derived at least once
+    from a real, non-zero settings-page read. Once that's done, the %
+    itself updates live every call as local usage accrues -- no further
+    browser reads needed except to occasionally re-verify the cap hasn't
+    drifted (see CAP_MAX_AGE), and the weekly window advances on its own
+    at the real reset boundary (analytically, from rate_limits' own
+    resets_at when available) -- also no browser read needed.
+
+    Before a cap has ever been derived (only possible via a non-zero real
+    read -- see usage-calibrate-fable.py), this does NOT report `stale`:
+    the same graceful-fallback principle as the 5h/weekly-all fix in
+    v0.3.2 (show the last known real number instead of an alarming
+    "unavailable" whenever something honest is already known, rather than
+    disappointing a user with an error state that isn't one). A window
+    that has since rolled over starts fresh at 0% by definition; otherwise
+    the last real read on file (necessarily 0%, since that's the only way
+    a cap couldn't be derived) is shown plainly. `stale` is reserved for
+    genuine drift risk once a cap *does* exist -- too old to trust, or a
+    live projection so far past it that the cap itself is suspect --
+    because relaxing those the same way would resurrect the exact
+    silent-drift bug (showing 99% when the real number was 0%) v0.4.1 was
+    built to catch."""
     if not os.path.exists(FABLE_CAL_PATH):
         return None
     try:
@@ -77,29 +118,83 @@ def fable_estimate(now, current_resets_at=None):
         return None
 
     tracked_model = cal["tracked_model"]
-    stale = now > next_reset
-    if current_resets_at is not None and int(next_reset.timestamp()) != int(current_resets_at):
-        stale = True
 
-    if stale:
+    # Advance the window to the real current reset boundary first, before
+    # branching on cap state, so every case below reasons about the
+    # *current* window rather than a stale one. No browser read needed:
+    # prefer rate_limits' own resets_at (ground truth -- the tracked
+    # model's pool resets in lockstep with the all-models weekly) when
+    # available, else step forward in 7-day increments from the last known
+    # boundary.
+    if current_resets_at is not None:
+        next_reset = datetime.fromtimestamp(current_resets_at, tz=timezone.utc)
+    else:
+        while now > next_reset:
+            next_reset += timedelta(days=7)
+    window_start = next_reset - timedelta(days=7)
+    rolled_over = window_start.isoformat() != cal.get("window_start")
+
+    cap = cal.get("cap")
+    cap_derived_at_raw = cal.get("cap_derived_at")
+
+    if not cap or not cap_derived_at_raw:
+        # No cap ever derived -- only possible when every real read so far
+        # landed at 0% (or a fresh install). 0% is honest exactly as long
+        # as local transcripts still show zero tracked usage this window;
+        # the moment any appears there's nothing to project it against, so
+        # report stale to trigger the auto-recalibration that derives the
+        # cap from a real non-zero read. Without this check, the friendly
+        # 0% would sit frozen while real usage climbed -- the same freeze
+        # bug this model was built to kill, in friendlier clothes.
+        try:
+            tokens = json.loads(
+                subprocess.check_output(
+                    [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL
+                )
+            )
+            tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
+        except Exception:
+            return {"tracked_model": tracked_model, "stale": True}
+        if not rolled_over and tracked_now > cal.get("tokens_at_cal", 0):
+            return {"tracked_model": tracked_model, "stale": True}
+        if rolled_over and tracked_now > 0:
+            return {"tracked_model": tracked_model, "stale": True}
+        return {
+            "tracked_model": tracked_model,
+            "stale": False,
+            "pct": 0 if rolled_over else cal.get("pct", 0),
+            "resets_at": int(next_reset.timestamp()),
+        }
+
+    try:
+        cap_derived_at = datetime.fromisoformat(cap_derived_at_raw)
+    except Exception:
+        return {"tracked_model": tracked_model, "stale": True}
+    if now - cap_derived_at > CAP_MAX_AGE:
         return {"tracked_model": tracked_model, "stale": True}
 
     try:
         tokens = json.loads(
             subprocess.check_output(
-                [sys.executable, TOKENS_SINCE, cal["window_start"]], stderr=subprocess.DEVNULL
+                [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL
             )
         )
     except Exception:
         return {"tracked_model": tracked_model, "stale": True}
 
     tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
-    pct = cal["pct"] * (tracked_now / cal["tokens_at_cal"]) if cal.get("tokens_at_cal") else cal["pct"]
-    pct = min(pct, 150)
+    pct = 100 * tracked_now / cap
+
+    if pct > PROJECTION_CEILING:
+        # The cap itself has likely drifted from reality (Anthropic changed
+        # the limit, or the derivation was off) -- don't present a number
+        # nobody would believe.
+        return {"tracked_model": tracked_model, "stale": True}
+
     return {
         "tracked_model": tracked_model,
         "stale": False,
-        "pct": pct,
+        "pct": min(pct, 150),
         "resets_at": int(next_reset.timestamp()),
     }
 
