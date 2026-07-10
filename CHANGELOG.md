@@ -4,6 +4,31 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-07-10
+
+### Added
+- The statusline now trails with the current session's own full
+  `session_id`, read from the same stdin payload as the model/effort
+  label. Copying it lets a session running up against a usage limit be
+  resumed in a fresh terminal window with `claude --resume <id>` — the
+  full UUID, not a shortened prefix, since that's the only form
+  `--resume` accepts.
+- Optional (`CLAUDE_USAGE_THEME_WATCH=1`, macOS only) background detection
+  of UI theme staleness: Claude Code's theme resolves once at session
+  launch and is never hot-reloaded, so a long-open session silently drifts
+  from the OS light/dark appearance with `/config theme=auto` as the only
+  fix. A new `UserPromptSubmit` hook (`bin/theme-watch-prompt-hook.py`,
+  wired by `install.sh`) flags a real drift to Claude in the background —
+  never in the visible statusline bar — the first time it's noticed, so
+  it can be surfaced unprompted instead of sitting silently stale.
+
+### Changed
+- The cached-fallback tail (shown briefly at session start, before the
+  first real `rate_limits` payload lands) now reads `(refreshing…)`
+  instead of `(cached, auto-updates shortly)` — plainer wording, and
+  short enough on both the 5h and weekly rows that the new `session_id`
+  segment no longer gets truncated off the end of the bar.
+
 ## [0.5.1] - 2026-07-10
 
 ### Fixed

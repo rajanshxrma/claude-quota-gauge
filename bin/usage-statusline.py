@@ -23,12 +23,19 @@ Leads with the current session's own active model + reasoning effort
 usage_common.py). Since Claude Code invokes this command separately per
 open session, each terminal's bar reflects only its own session -- no
 extra bookkeeping needed to keep multiple concurrent sessions straight.
+
+Also trails with this session's own full session_id (also on the same
+stdin payload), right-aligned at the terminal's edge (see right_align() in
+usage_common.py) so it reads as its own cluster rather than just another
+`|`-joined segment. A session running up against a usage limit can be
+resumed in a fresh terminal window with `claude --resume <id>` -- the
+command needs the whole UUID, not a shortened prefix.
 """
 import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model, right_align  # noqa: E402
 
 load_env_file()
 
@@ -123,7 +130,17 @@ def main():
     if tasks is not None:
         parts.append(f"pending: {tasks}")
 
-    print(" | ".join(parts))
+    left = " | ".join(parts)
+
+    # Full UUID (not a shortened prefix) -- this is the exact argument
+    # `claude --resume <id>` needs to pick this session back up in a fresh
+    # terminal window if the current one hits a usage limit. Right-aligned
+    # (see right_align()) so it reads as its own cluster at the far edge of
+    # the bar rather than just another `|`-joined segment.
+    session_id = payload.get("session_id")
+    right = f"session: {session_id}" if session_id else ""
+
+    print(right_align(left, right))
 
 
 if __name__ == "__main__":

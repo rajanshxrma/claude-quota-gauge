@@ -17,15 +17,16 @@ echo "  copied scripts to $SCRIPTS_DIR"
 echo "  copied /pending and /gauge-cali-fable to $COMMANDS_DIR"
 
 echo ""
-read -r -p "Wire the statusline and SessionStart hook into ~/.claude/settings.json now? [Y/n] " REPLY
+read -r -p "Wire the statusline and hooks into ~/.claude/settings.json now? [Y/n] " REPLY
 REPLY="${REPLY:-Y}"
 if [[ "$REPLY" =~ ^[Yy] ]]; then
   python3 - "$CLAUDE_DIR/settings.json" \
     "python3 $SCRIPTS_DIR/usage-statusline.py" \
-    "python3 $SCRIPTS_DIR/usage-session-hook.py" <<'PYEOF'
+    "python3 $SCRIPTS_DIR/usage-session-hook.py" \
+    "python3 $SCRIPTS_DIR/theme-watch-prompt-hook.py" <<'PYEOF'
 import json, os, sys
 
-settings_path, statusline_command, hook_command = sys.argv[1], sys.argv[2], sys.argv[3]
+settings_path, statusline_command, hook_command, prompt_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 settings = {}
 if os.path.exists(settings_path):
@@ -65,13 +66,28 @@ else:
     session_start.append({"hooks": [{"type": "command", "command": hook_command, "timeout": 15}]})
     print(f"  added SessionStart hook: {hook_command}")
 
+user_prompt_submit = hooks.setdefault("UserPromptSubmit", [])
+
+prompt_already_present = any(
+    h.get("command") and normalize(h["command"]) == normalize(prompt_hook_command)
+    for group in user_prompt_submit
+    for h in group.get("hooks", [])
+)
+
+if prompt_already_present:
+    print("  UserPromptSubmit hook already present, left settings.json unchanged")
+else:
+    user_prompt_submit.append({"hooks": [{"type": "command", "command": prompt_hook_command, "timeout": 5}]})
+    print(f"  added UserPromptSubmit hook: {prompt_hook_command}")
+    print("  (no-ops unless CLAUDE_USAGE_THEME_WATCH=1 is set -- see config/usage-calibrator.env.example)")
+
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)
 PYEOF
 else
   echo "  skipped. Add these to ~/.claude/settings.json yourself:"
   echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
-  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ] }'
+  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ] }'
 fi
 
 echo ""
