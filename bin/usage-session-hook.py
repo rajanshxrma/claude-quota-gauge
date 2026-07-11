@@ -44,10 +44,9 @@ def main():
         model = cache.get("fable_tracked_model")
         if model and cache.get("fable_stale"):
             context += (
-                f" | {model} weekly estimate is stale -- read the real % off "
-                f"claude.ai/settings/usage and run `python3 ~/.claude/scripts/"
-                f"usage-calibrate-fable.py <pct>` now, no need to ask first "
-                f"(viewing that page has no side effects)."
+                f" | {model} weekly estimate is stale -- run /gauge-calibrate "
+                f"now, no need to ask first (viewing that settings page has "
+                f"no side effects)."
             )
         elif model and "fable_pct" in cache:
             context += " | " + fmt_window(f"{model} weekly", cache["fable_pct"], cache.get("fable_resets_at"), now)

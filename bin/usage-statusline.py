@@ -120,12 +120,12 @@ def main():
             cache["seven_day_pct"] = pct
             cache["seven_day_resets_at"] = resets_at
 
-    fable = fable_estimate(now, cache.get("seven_day_resets_at"))
+    fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
     if fable:
         cache["fable_tracked_model"] = fable["tracked_model"]
         cache["fable_stale"] = fable["stale"]
         if fable["stale"]:
-            parts.append(f"{fable['tracked_model']}: stale, run /gauge-cali-fable")
+            parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
             cache.pop("fable_pct", None)
             cache.pop("fable_resets_at", None)
         else:

@@ -7,19 +7,34 @@ FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.j
 TOKENS_SINCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens-since.py")
 # Absolute-cap model (replaced the old ratio-scaling model 2026-07-10): a
 # calibration derives a weekly $ cap (tokens_at_cal / (pct/100)) instead of
-# remembering a % to scale. The cap is slow-moving -- Anthropic's weekly
-# limit rarely changes -- so it only needs occasional re-verification, not
-# a tight hours-long ceiling. This also fixed a real bug in the old model:
+# remembering a % to scale. This also fixed a real bug in the old model:
 # calibrating at exactly 0% (pct=0) froze the ratio-scaled estimate at 0%
 # forever, since it multiplied by cal["pct"]. The cap model has no such
 # freeze -- it projects live local usage against a fixed denominator.
-CAP_MAX_AGE = timedelta(days=14)
+#
+# CAP_MAX_AGE used to be 14 days on the (wrong) assumption that the cap is
+# slow-moving. It isn't the cap that drifts fastest -- it's the *local
+# projection's blind spot*: tokens-since.py only sees Claude Code CLI usage,
+# never claude.ai web/mobile usage of the tracked model. Whenever a real
+# chunk of that model's usage happens off the CLI, the projection quietly
+# falls behind (e.g. an 8%->40% real move showed up locally as only
+# 8%->16%). A 14-day ceiling let that run for two weeks before ever forcing
+# a re-read. Tightened to a matter of hours so a stale projection can't
+# coast silently -- overridable via CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS.
+CAP_MAX_AGE = timedelta(hours=float(os.environ.get("CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS", "12")))
 # Local projections aren't ground truth -- if the cost-weighted local
 # estimate blows past a sane ceiling, that's a sign the cap itself has
-# drifted from reality (e.g. Anthropic adjusted the limit), not that Fable
-# usage is actually >120% of the weekly pool. Report stale rather than a
-# number nobody would believe.
+# drifted from reality (e.g. Anthropic adjusted the limit), not that the
+# tracked model's usage is actually >120% of the weekly pool. Report stale
+# rather than a number nobody would believe.
 PROJECTION_CEILING = 120
+# The other half of the fix: CAP_MAX_AGE alone only catches drift once it's
+# had hours to accumulate. This catches it immediately -- if the real
+# aggregate weekly % (free, verified, on every render) has moved more than
+# this many points since the last calibration, some real usage happened
+# that the local-only projection may not have seen, so force a re-read
+# rather than trust the projection between now and the next max-age check.
+FABLE_DRIFT_THRESHOLD = float(os.environ.get("CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD", "5"))
 
 
 def load_env_file(path="~/.claude/claude-quota-gauge.env"):
@@ -83,7 +98,7 @@ def version_lt(a, b):
     return a_parts < b_parts
 
 
-def fable_estimate(now, current_resets_at=None):
+def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     """Returns the live weekly % for the per-model pool Anthropic's real
     rate_limits field doesn't break out (default: Fable) -- projected from a
     weekly $ cap derived at the last real calibration against
@@ -116,7 +131,18 @@ def fable_estimate(now, current_resets_at=None):
     live projection so far past it that the cap itself is suspect --
     because relaxing those the same way would resurrect the exact
     silent-drift bug (showing 99% when the real number was 0%) v0.4.1 was
-    built to catch."""
+    built to catch.
+
+    `current_seven_day_pct` (optional -- the real, free aggregate weekly %
+    from the same rate_limits payload/cache the caller already has) is the
+    fast half of that same guarantee: CAP_MAX_AGE alone only forces a
+    re-read after it's had hours to go stale. Comparing against the
+    aggregate catches drift the moment it happens -- if real account-wide
+    usage has moved more than FABLE_DRIFT_THRESHOLD points since this
+    calibration, something happened that the local-only projection may not
+    have seen (e.g. the tracked model used outside this CLI), so report
+    stale immediately rather than keep projecting a number that's already
+    known to be behind reality."""
     if not os.path.exists(FABLE_CAL_PATH):
         return None
     try:
@@ -180,6 +206,15 @@ def fable_estimate(now, current_resets_at=None):
     except Exception:
         return {"tracked_model": tracked_model, "stale": True}
     if now - cap_derived_at > CAP_MAX_AGE:
+        return {"tracked_model": tracked_model, "stale": True}
+
+    seven_day_pct_at_cal = cal.get("seven_day_pct_at_cal")
+    if (
+        not rolled_over
+        and current_seven_day_pct is not None
+        and seven_day_pct_at_cal is not None
+        and abs(current_seven_day_pct - seven_day_pct_at_cal) > FABLE_DRIFT_THRESHOLD
+    ):
         return {"tracked_model": tracked_model, "stale": True}
 
     try:

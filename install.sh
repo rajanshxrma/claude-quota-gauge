@@ -36,9 +36,9 @@ mkdir -p "$SCRIPTS_DIR" "$COMMANDS_DIR"
 cp "$SCRIPT_DIR"/bin/*.py "$SCRIPTS_DIR/"
 chmod +x "$SCRIPTS_DIR"/*.py
 cp "$SCRIPT_DIR"/commands/pending.md "$COMMANDS_DIR/"
-cp "$SCRIPT_DIR"/commands/gauge-cali-fable.md "$COMMANDS_DIR/"
+cp "$SCRIPT_DIR"/commands/gauge-calibrate.md "$COMMANDS_DIR/"
 echo "  copied scripts to $SCRIPTS_DIR"
-echo "  copied /pending and /gauge-cali-fable to $COMMANDS_DIR"
+echo "  copied /pending and /gauge-calibrate to $COMMANDS_DIR"
 
 # Scaffold the config file so every optional variable is discoverable in one
 # place -- every value stays commented out (i.e. still defaulted) until you
@@ -191,7 +191,7 @@ echo ""
 echo "  Optional, opt-in separately:"
 echo "    - a separate weekly % for one model (e.g. Fable), if your account"
 echo "      has its own pool for it that rate_limits doesn't break out --"
-echo "      run /gauge-cali-fable once to turn it on"
+echo "      run /gauge-calibrate once to turn it on"
 echo "    - the 'pending: N' count -- set up above, or any time later"
 echo "    - a background launchd watcher for threshold notifications, and"
 echo "      macOS UI-theme-drift detection (CLAUDE_USAGE_THEME_WATCH=1)"
