@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.3] - 2026-07-11
+
+### Changed
+- **The drift tripwire now measures *unexplained* aggregate movement, not
+  raw aggregate movement.** The v0.8.0 tripwire compared the real
+  weekly-all-models % against its value at calibration with a flat 5-point
+  threshold — but that conflated movement from ordinary CLI usage (fully
+  visible to the local projection, proves nothing) with movement from usage
+  the projection can't see (the entire point). A threshold loose enough to
+  not false-alarm on a heavy CLI day was too loose to catch hidden drift
+  quickly: with the aggregate pool measuring ~6x the tracked model's pool
+  on the account this was built against, 5 aggregate points could conceal
+  ~30 tracked-model points of drift — which is exactly how the original
+  16%-shown/40%-real incident fit under it. The tripwire now subtracts the
+  aggregate movement local usage accounts for (via an aggregate-pool cap
+  estimated at calibration from the same snapshot — `local_total_at_cal`
+  recorded by `usage-calibrate-fable.py`) and trips on the remainder, so
+  the default threshold drops from 5 points to 2. Calibration files from
+  0.8.0–0.8.2 (without the new field) fall back to the old raw-diff check
+  at the old threshold until one recalibration upgrades them.
+
 ## [0.8.2] - 2026-07-11
 
 ### Fixed

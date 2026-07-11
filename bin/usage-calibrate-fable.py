@@ -94,6 +94,11 @@ def main():
         "next_reset": next_reset.isoformat(),
         "tokens_at_cal": tracked_tokens,
         "seven_day_pct_at_cal": seven_day_pct_at_cal,
+        # All-models local cost this window, paired with the aggregate %
+        # above: together they let the drift tripwire in fable_estimate()
+        # estimate the aggregate pool's cap and subtract locally-explained
+        # aggregate movement, so only *unexplained* movement trips staleness.
+        "local_total_at_cal": sum(tokens.values()),
     }
 
     if pct > 0:
