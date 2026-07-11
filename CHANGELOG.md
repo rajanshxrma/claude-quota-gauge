@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-07-11
+
+### Added
+- **Mid-session self-heal for tracked-model staleness.** The `SessionStart`
+  auto-recalibration nudge (shipped in v0.3.0) only fires once, at a
+  session's own launch — a long-running session that crosses the v0.8.0
+  staleness threshold (`CAP_MAX_AGE` or the drift tripwire) partway through
+  had no way to self-heal until a new session happened to start. New
+  `UserPromptSubmit` hook `bin/fable-stale-prompt-hook.py` re-checks on
+  every prompt, so the very next message after it goes stale mid-session
+  triggers the same "recalibrate now, no need to ask" nudge — same shape as
+  the existing UI-theme-drift detector, which solves the identical
+  "mid-session, not just at launch" problem for that unrelated staleness.
+  New `fable_stale_to_announce()` in `usage_common.py` dedups per session
+  against the calibration's own identity (mirroring
+  `theme_drift_to_announce()`), so a given stale episode is announced once,
+  not spammed every message, and re-arms cleanly once a fresh calibration
+  lands. Backed by a new small state file, `fable-stale-state.json`, pruned
+  the same way as the existing `theme-state.json`.
+
 ## [0.8.0] - 2026-07-11
 
 ### Fixed
