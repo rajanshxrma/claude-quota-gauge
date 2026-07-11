@@ -125,9 +125,23 @@ def main():
         cache["fable_tracked_model"] = fable["tracked_model"]
         cache["fable_stale"] = fable["stale"]
         if fable["stale"]:
-            parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
-            cache.pop("fable_pct", None)
-            cache.pop("fable_resets_at", None)
+            # Staleness is Claude's problem now, not the user's: the
+            # SessionStart and UserPromptSubmit hooks both tell Claude to
+            # recalibrate automatically the moment they see this flag, so
+            # the alarming "stale, run /gauge-calibrate" bar text (from when
+            # recalibration was a manual chore) would just be noise for a
+            # window that typically lasts one prompt. Show the last known %
+            # with the same "(refreshing…)" marker the 5h/weekly numbers use
+            # while awaiting fresh data -- honest that it's being updated,
+            # calm about it. The cached % is deliberately kept (not popped):
+            # the hooks key off fable_stale, not the % fields, and the
+            # watcher's threshold checks are better off with a slightly-old
+            # number than none. The explicit command text remains only as
+            # the fallback when there's no cached % to show at all.
+            if "fable_pct" in cache:
+                parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, cached=True))
+            else:
+                parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
         else:
             parts.append(fmt_window(fable["tracked_model"], fable["pct"], fable["resets_at"], now))
             cache["fable_pct"] = fable["pct"]

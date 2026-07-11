@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.4] - 2026-07-11
+
+### Changed
+- **The statusline no longer shows `stale, run /gauge-calibrate` when a
+  last known % exists.** That alarm text dates from when recalibration was
+  a manual chore the bar needed to assign the user; since 0.8.1 the
+  SessionStart and UserPromptSubmit hooks make staleness Claude's job to
+  fix (typically within one prompt), so the alarm was noise for a window
+  that self-heals. A stale tracked-model estimate now renders as the last
+  known % with the same `(refreshing…)` marker the 5h/weekly numbers
+  already use while awaiting fresh data. The cached % is kept through the
+  stale window rather than popped (the hooks key off the `fable_stale`
+  flag, not the % fields, and the watcher's threshold checks are better
+  off with a slightly-old number than none). The explicit command text
+  remains only for the no-cached-number-at-all case.
+
 ## [0.8.3] - 2026-07-11
 
 ### Changed
