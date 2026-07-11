@@ -26,7 +26,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.8.5-informational)
+![version](https://img.shields.io/badge/version-0.8.6-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -184,7 +184,7 @@ calibration time from the same snapshot) — what's left is precisely the
 the threshold can sit at 2 points without false alarms on heavy CLI days.
 
 In the bar, staleness looks calm, not alarming: the last known % stays up,
-marked `(refreshes next msg)` — because recalibration is Claude's job now
+marked `(refreshes next msg!)` — because recalibration is Claude's job now
 (see the hooks below), not a chore the bar needs to assign you. The marker
 names its trigger on purpose: the refresh happens automatically as part of
 your next message to any session, so there's nothing to sit and wait for —

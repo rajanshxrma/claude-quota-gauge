@@ -145,7 +145,7 @@ def main():
             # naming the trigger tells them they can just keep working --
             # nothing here is worth sitting and waiting for.
             if "fable_pct" in cache:
-                parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, note="refreshes next msg"))
+                parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, note="refreshes next msg!"))
             else:
                 parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
         else:
