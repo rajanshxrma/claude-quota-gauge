@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.2] - 2026-07-11
+
+### Fixed
+- **The two config knobs added in 0.8.0 were silently dead via the config
+  file.** `CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` and
+  `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` were read from the environment at
+  module import time in `usage_common.py` — but every consumer script
+  imports that module *first* and calls `load_env_file()` *after*, so the
+  defaults were baked in before `~/.claude/claude-quota-gauge.env`'s
+  overrides ever landed. Both are now read lazily inside `fable_estimate()`
+  itself, matching the read-after-load ordering the pre-existing config
+  vars (e.g. `CLAUDE_USAGE_ALERT_THRESHOLD`) already follow. Defaults were
+  unaffected; only non-default overrides via the config file were being
+  ignored.
+
 ## [0.8.1] - 2026-07-11
 
 ### Added
