@@ -34,13 +34,14 @@ def _cap_max_age():
 
 
 # The other half of the fix: the max-age ceiling alone only catches drift
-# once it's had hours to accumulate. This catches it immediately -- if the
-# real aggregate weekly % (free, verified, on every render) has moved more
-# than this many points since the last calibration, some real usage
-# happened that the local-only projection may not have seen, so force a
-# re-read rather than trust the projection until the next max-age check.
+# once it's had hours to accumulate. This catches it fast -- measured in
+# points of *unexplained* aggregate-weekly movement since the last
+# calibration (movement beyond what local usage accounts for -- see the
+# tripwire block in fable_estimate()). Because locally-explained movement
+# is subtracted out first, this can sit tight without false-positiving on
+# heavy CLI days.
 def _fable_drift_threshold():
-    return float(os.environ.get("CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD", "5"))
+    return float(os.environ.get("CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD", "2"))
 
 
 # Local projections aren't ground truth -- if the cost-weighted local
@@ -222,15 +223,6 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     if now - cap_derived_at > _cap_max_age():
         return {"tracked_model": tracked_model, "stale": True}
 
-    seven_day_pct_at_cal = cal.get("seven_day_pct_at_cal")
-    if (
-        not rolled_over
-        and current_seven_day_pct is not None
-        and seven_day_pct_at_cal is not None
-        and abs(current_seven_day_pct - seven_day_pct_at_cal) > _fable_drift_threshold()
-    ):
-        return {"tracked_model": tracked_model, "stale": True}
-
     try:
         tokens = json.loads(
             subprocess.check_output(
@@ -239,6 +231,35 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
         )
     except Exception:
         return {"tracked_model": tracked_model, "stale": True}
+
+    # The drift tripwire, sharpened (v0.8.3): a raw |agg_now - agg_at_cal|
+    # threshold conflates two very different things -- aggregate movement
+    # from ordinary CLI usage (fully visible to the local projection, proves
+    # nothing) and movement from usage somewhere the projection can't see
+    # (the entire point). A threshold loose enough to not false-positive on
+    # a heavy CLI day was therefore too loose to catch real hidden drift
+    # quickly. Fix: subtract the movement local usage already explains, and
+    # trip only on what's left. The aggregate cap needed for that conversion
+    # is derived at calibration time from the same snapshot
+    # (local_total_at_cal / seven_day_pct_at_cal) -- an *underestimate*
+    # whenever pre-calibration usage happened off this CLI (real usage >=
+    # local usage for the same reported %), which overestimates the
+    # explained share and undertrips slightly; the max-age ceiling remains
+    # the unconditional backstop for that residual. Old calibration files
+    # without the new field fall back to the raw diff at the old looser
+    # threshold until one recalibration upgrades them.
+    seven_day_pct_at_cal = cal.get("seven_day_pct_at_cal")
+    if not rolled_over and current_seven_day_pct is not None and seven_day_pct_at_cal is not None:
+        agg_delta = current_seven_day_pct - seven_day_pct_at_cal
+        local_total_at_cal = cal.get("local_total_at_cal")
+        if local_total_at_cal and seven_day_pct_at_cal > 0:
+            agg_cap_est = local_total_at_cal / (seven_day_pct_at_cal / 100)
+            local_delta = max(0.0, sum(tokens.values()) - local_total_at_cal)
+            explained = 100 * local_delta / agg_cap_est
+            if abs(agg_delta - explained) > _fable_drift_threshold():
+                return {"tracked_model": tracked_model, "stale": True}
+        elif abs(agg_delta) > max(_fable_drift_threshold(), 5):
+            return {"tracked_model": tracked_model, "stale": True}
 
     tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
     pct = 100 * tracked_now / cap

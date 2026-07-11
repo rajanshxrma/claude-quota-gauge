@@ -26,7 +26,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.8.2-informational)
+![version](https://img.shields.io/badge/version-0.8.3-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -128,7 +128,7 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_PENDING_FILE` | `./PENDING.md`, then `~/.claude/PENDING.md` | See the PENDING.md convention below |
 | `CLAUDE_USAGE_TRACK_MODEL` | `fable` | Which model gets the optional calibrated weekly tracking — see below |
 | `CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` | `12` | Hours a calibration can go unverified before the tracked-model estimate reports stale — see below |
-| `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` | `5` | Points the real weekly-all-models % can move from its value at calibration before the estimate reports stale immediately — see below |
+| `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` | `2` | Points of *unexplained* weekly-all-models movement (beyond what local usage accounts for) before the estimate reports stale immediately — see below |
 | `CLAUDE_USAGE_ALERT_THRESHOLD` | `85` | % that triggers a desktop notification |
 | `CLAUDE_USAGE_THEME_WATCH` | unset (off) | macOS-only: flags UI theme staleness in the background — see below |
 
@@ -174,9 +174,14 @@ Because of that, it leans hard toward flagging itself stale rather than
 showing a confident wrong number: it reports stale the moment the cap
 hasn't been re-verified in `CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` (default
 12h), *or* the moment the real weekly-all-models % (free on every render)
-has moved more than `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` points (default 5)
-since the last calibration — a fast signal that account-wide usage moved in
-a way the local-only projection may not have caught. Before a cap has ever
+has moved more than `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` points (default 2)
+beyond what local usage since the last calibration accounts for. That
+"beyond what local usage accounts for" matters: aggregate movement from
+ordinary CLI usage is fully visible to the projection and proves nothing,
+so it's subtracted out (using an aggregate-pool cap estimated at
+calibration time from the same snapshot) — what's left is precisely the
+"usage happened somewhere this projection can't see" signal, which is why
+the threshold can sit at 2 points without false alarms on heavy CLI days. Before a cap has ever
 been derived at all (e.g. right after install), it doesn't show an alarming
 `stale, run this command` message — same principle as the 5-hour/weekly-all
 numbers never showing a scary `unavailable` when a real cached number is
