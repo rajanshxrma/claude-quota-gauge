@@ -75,12 +75,23 @@ def main():
         # the last cached real numbers instead of a bare "unavailable" so the
         # bar still shows something useful; only report "unavailable" outright
         # when there's no prior cache to fall back on.
+        #
+        # Tracked separately from `parts`: since v0.4.0 the model segment is
+        # always prepended to `parts` before this branch runs, so `parts` is
+        # never actually empty here -- checking it directly meant this whole
+        # fallback (including the "upgrade Claude Code" message) could never
+        # fire, and a fresh install with no cache yet just showed a blank gap
+        # with zero explanation. `usage_added` tracks only the segments this
+        # branch itself appends.
+        usage_added = False
         if "five_hour_pct" in cache:
             parts.append(fmt_window("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"), now, cached=True))
+            usage_added = True
         if "seven_day_pct" in cache:
             parts.append(fmt_window("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"), now, cached=True))
+            usage_added = True
 
-        if not parts:
+        if not usage_added:
             # Only blame the CLI version when the payload actually confirms
             # it's old -- an empty rate_limits with no cache can also mean a
             # free-tier account, neither of which is a version problem. Never

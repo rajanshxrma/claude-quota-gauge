@@ -23,7 +23,7 @@ backend; it's calibrated by hand against the real settings page once to
 derive a weekly cap, then projected live from local usage against that cap,
 but tracks closely enough that it's shown the same way as the two above it.
 
-![version](https://img.shields.io/badge/version-0.6.0-informational)
+![version](https://img.shields.io/badge/version-0.7.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -31,8 +31,9 @@ but tracks closely enough that it's shown the same way as the two above it.
 ## Requirements
 
 Claude Code **v2.1.80 or newer** (check with `claude --version`) — that's
-the release where `rate_limits` was added to the statusline payload. On an
-older version, the statusline will say so plainly rather than guess.
+the release where `rate_limits` was added to the statusline payload.
+`install.sh` checks this for you and warns if you're on an older version;
+either way, the statusline itself will say so plainly rather than guess.
 
 ## Quickstart
 
@@ -41,10 +42,15 @@ git clone https://github.com/rajanshxrma/claude-quota-gauge && cd claude-quota-g
 ./install.sh
 ```
 
-That's it — no calibration step, nothing to read off a settings page by
-hand. Open Claude Code and the statusline shows your real 5h/weekly % as
-soon as it first renders, usually within a few seconds. If your account
-also has its own weekly pool for one model (e.g. Fable), see
+The installer checks your Claude Code version, wires the statusline and
+hooks into `~/.claude/settings.json` (asking first, and backing up your
+existing settings), and walks you through one optional feature —
+[pending tracking](#the-pendingmd-convention) — explaining what it is
+before asking whether to turn it on (off by default either way). That's it —
+no calibration step, nothing to read off a settings page by hand. Open
+Claude Code and the statusline shows your real 5h/weekly % as soon as it
+first renders, usually within a few seconds. If your account also has its
+own weekly pool for one model (e.g. Fable), see
 [Optional: per-model weekly tracking](#optional-per-model-weekly-tracking-eg-fable)
 for a one-time opt-in step to track that too.
 
@@ -107,10 +113,12 @@ If a long-running session gets close to a usage limit, copy that ID and run
 
 ## Configuration
 
-Copy `config/usage-calibrator.env.example` to `~/.claude/usage-calibrator.env`
-and uncomment what you need — it's loaded automatically, including by the
-statusline command, the `SessionStart` hook, and `launchd`, none of which
-see your shell profile.
+`install.sh` copies `config/claude-quota-gauge.env.example` to
+`~/.claude/claude-quota-gauge.env` for you (skipped if either that file or
+the pre-0.7.0 `~/.claude/usage-calibrator.env` already exists — the old
+name still works, it's just no longer the default). Uncomment what you
+need — it's loaded automatically, including by the statusline command, the
+`SessionStart` hook, and `launchd`, none of which see your shell profile.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -127,6 +135,11 @@ can pick one up without re-deriving context. `usage-statusline.py` counts the
 headings (excluding ones with "RESOLVED" in the title) and surfaces it as
 `pending: N` in your statusline — a standing, ambient reminder that
 something's still open. See `examples/PENDING.md` for the shape.
+
+Off by default, on purpose — `pending: N` only appears once a `PENDING.md`
+actually exists. `install.sh` walks you through this explicitly (explains
+it in full, then asks) rather than either hiding it in the README or
+turning it on unasked; decline and it stays off, exactly as designed.
 
 Run `/pending <what's parked>` to add one from inside a Claude Code session —
 it finds the right file (same resolution order as above), creates it from
