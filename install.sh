@@ -60,10 +60,11 @@ if [[ "$REPLY" =~ ^[Yy] ]]; then
   python3 - "$CLAUDE_DIR/settings.json" \
     "python3 $SCRIPTS_DIR/usage-statusline.py" \
     "python3 $SCRIPTS_DIR/usage-session-hook.py" \
-    "python3 $SCRIPTS_DIR/theme-watch-prompt-hook.py" <<'PYEOF'
+    "python3 $SCRIPTS_DIR/theme-watch-prompt-hook.py" \
+    "python3 $SCRIPTS_DIR/fable-stale-prompt-hook.py" <<'PYEOF'
 import json, os, sys
 
-settings_path, statusline_command, hook_command, prompt_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 
 settings = {}
 if os.path.exists(settings_path):
@@ -118,13 +119,26 @@ else:
     print(f"  added UserPromptSubmit hook: {prompt_hook_command}")
     print("  (no-ops unless CLAUDE_USAGE_THEME_WATCH=1 is set -- see config/claude-quota-gauge.env.example)")
 
+fable_prompt_already_present = any(
+    h.get("command") and normalize(h["command"]) == normalize(fable_prompt_hook_command)
+    for group in user_prompt_submit
+    for h in group.get("hooks", [])
+)
+
+if fable_prompt_already_present:
+    print("  fable-stale UserPromptSubmit hook already present, left settings.json unchanged")
+else:
+    user_prompt_submit.append({"hooks": [{"type": "command", "command": fable_prompt_hook_command, "timeout": 5}]})
+    print(f"  added UserPromptSubmit hook: {fable_prompt_hook_command}")
+    print("  (no-ops unless the tracked-model weekly estimate is stale mid-session)")
+
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)
 PYEOF
 else
   echo "  skipped. Add these to ~/.claude/settings.json yourself:"
   echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
-  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ] }'
+  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] } ] }'
 fi
 
 # --- Optional: pending tracking -------------------------------------------

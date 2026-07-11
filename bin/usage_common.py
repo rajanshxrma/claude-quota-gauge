@@ -243,6 +243,92 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     }
 
 
+FABLE_STALE_STATE_PATH = os.path.expanduser("~/.claude/scripts/fable-stale-state.json")
+LIVE_CACHE_PATH = os.path.expanduser("~/.claude/scripts/usage-live.json")
+
+
+def _load_fable_stale_state():
+    if not os.path.exists(FABLE_STALE_STATE_PATH):
+        return {}
+    try:
+        with open(FABLE_STALE_STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_fable_stale_state(state, now):
+    # Same pruning shape as the theme-drift state file below -- an abandoned
+    # or killed session's row shouldn't accumulate forever.
+    cutoff = now - THEME_STATE_MAX_AGE
+    pruned = {
+        sid: entry for sid, entry in state.items()
+        if datetime.fromisoformat(entry.get("last_seen", now.isoformat())) > cutoff
+    }
+    os.makedirs(os.path.dirname(FABLE_STALE_STATE_PATH), exist_ok=True)
+    with open(FABLE_STALE_STATE_PATH, "w") as f:
+        json.dump(pruned, f)
+
+
+def fable_stale_to_announce(session_id, now):
+    """Mid-session counterpart to the `SessionStart` staleness nudge in
+    usage-session-hook.py: that one only fires once, at a session's launch,
+    so a session that runs long enough to cross the staleness threshold
+    (CAP_MAX_AGE or FABLE_DRIFT_THRESHOLD) partway through would otherwise
+    sit stale for the rest of that session with nothing to prompt a fix.
+    Called from the UserPromptSubmit hook so it re-checks on every prompt --
+    same shape as theme_drift_to_announce() below, for the same reason
+    (Claude Code has no way to re-fire SessionStart mid-session).
+
+    Dedups per session against the *calibration's own identity*
+    (`calibrated_at`) so a given stale calibration is announced to a given
+    session at most once, not spammed every prompt while nothing has
+    changed. The moment a fresh calibration lands -- via this hook's own
+    nudge succeeding, the SessionStart hook, or a manual /gauge-calibrate --
+    the identity changes, so a genuinely new future stale episode re-arms
+    cleanly rather than staying suppressed. Returns the tracked model name
+    (e.g. "fable") when there's something new to announce, else None."""
+    if not session_id or not os.path.exists(LIVE_CACHE_PATH):
+        return None
+    try:
+        with open(LIVE_CACHE_PATH) as f:
+            cache = json.load(f)
+    except Exception:
+        return None
+
+    fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
+    state = _load_fable_stale_state()
+
+    if not fable or not fable.get("stale"):
+        # Genuinely fine right now -- clear any leftover dedup entry so a
+        # *future* stale episode (even the same calibration somehow going
+        # stale again) isn't suppressed by a marker from a resolved one.
+        if session_id in state:
+            del state[session_id]
+            _save_fable_stale_state(state, now)
+        return None
+
+    identity = None
+    if os.path.exists(FABLE_CAL_PATH):
+        try:
+            with open(FABLE_CAL_PATH) as f:
+                identity = json.load(f).get("calibrated_at")
+        except Exception:
+            pass
+
+    entry = state.get(session_id, {})
+    entry["last_seen"] = now.isoformat()
+    if entry.get("announced_for") == identity:
+        state[session_id] = entry
+        _save_fable_stale_state(state, now)
+        return None
+
+    entry["announced_for"] = identity
+    state[session_id] = entry
+    _save_fable_stale_state(state, now)
+    return fable["tracked_model"]
+
+
 THEME_STATE_PATH = os.path.expanduser("~/.claude/scripts/theme-state.json")
 # How long a session's drift-tracking entry survives with no prompts
 # touching it -- long enough to outlive a normal Claude Code session, short

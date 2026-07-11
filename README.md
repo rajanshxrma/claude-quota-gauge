@@ -26,7 +26,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.8.0-informational)
+![version](https://img.shields.io/badge/version-0.8.1-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -190,9 +190,15 @@ weekly-all-models number uses), so the projection naturally zeroes out
 right after a rollover.
 
 You'll rarely need to run the recalibration by hand: whenever it's stale,
-the SessionStart hook tells Claude to recalibrate immediately at the start
-of your next session — no need to ask first, since viewing a settings page
-has no side effects. Setup, one time (or to trigger it yourself):
+the `SessionStart` hook tells Claude to recalibrate immediately at the start
+of your next session, and a second hook (`UserPromptSubmit`,
+`bin/fable-stale-prompt-hook.py`) catches the case where staleness trips
+*mid-session* instead — the very next message after that gets the same
+"recalibrate now, no need to ask" nudge, so a long-running session
+self-heals without waiting for a new one. Both are dedup'd per session
+against the calibration's own identity, so you're told about a given stale
+episode once, not on every single message. Setup, one time (or to trigger
+it yourself):
 
 ```bash
 /gauge-calibrate
