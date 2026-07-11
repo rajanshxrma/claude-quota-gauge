@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.6] - 2026-07-11
+
+### Changed
+- The stale marker gained its exclamation mark: `(refreshes next msg!)` —
+  reads as reassurance rather than a status report.
+
 ## [0.8.5] - 2026-07-11
 
 ### Changed
