@@ -22,14 +22,23 @@ CAP_MAX_AGE = timedelta(days=14)
 PROJECTION_CEILING = 120
 
 
-def load_env_file(path="~/.claude/usage-calibrator.env"):
+def load_env_file(path="~/.claude/claude-quota-gauge.env"):
     """Loads KEY=VALUE overrides -- neither the statusline command nor a
     SessionStart hook nor launchd inherit the shell profile's env vars, so
     this is how personal config reaches these scripts. Never overrides an
-    already-set var."""
+    already-set var.
+
+    Falls back to the old ~/.claude/usage-calibrator.env filename (used
+    before the config file was renamed to match the project name) if the
+    new one isn't present, so existing installs keep working untouched --
+    no silent breakage just from upgrading the scripts."""
     path = os.path.expanduser(path)
     if not os.path.exists(path):
-        return
+        legacy = os.path.expanduser("~/.claude/usage-calibrator.env")
+        if os.path.exists(legacy):
+            path = legacy
+        else:
+            return
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -212,7 +221,7 @@ def theme_watch_enabled():
     dependency, exactly the kind of fragile platform-specific add-on that
     shouldn't be forced on every user of this cross-platform tool. Opt in
     per-machine via CLAUDE_USAGE_THEME_WATCH=1 in
-    ~/.claude/usage-calibrator.env."""
+    ~/.claude/claude-quota-gauge.env."""
     return os.environ.get("CLAUDE_USAGE_THEME_WATCH") == "1"
 
 

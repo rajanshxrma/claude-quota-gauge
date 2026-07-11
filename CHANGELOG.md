@@ -4,6 +4,44 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-10
+
+### Fixed
+- **The statusline could show a blank usage gap with zero explanation on a
+  fresh install.** The `usage: unavailable` fallback (including the
+  helpful `Claude Code X < 2.1.80` message) was gated on `if not parts`,
+  but the model segment added in 0.4.0 is always present — so that
+  condition could never be true. Result: a machine with no `rate_limits`
+  yet and no prior cache (every fresh install's first render, and every
+  render on Claude Code < 2.1.80) showed only the model and the
+  right-aligned session id, with nothing in between and no indication why.
+  The fallback now tracks its own segments independently of the model
+  segment, so it's reachable again.
+
+### Added
+- `install.sh` now checks `claude --version` and warns if it's older than
+  2.1.80, so the real requirement is learned at install time rather than
+  inferred from an incomplete bar.
+- `install.sh` scaffolds `~/.claude/claude-quota-gauge.env` from the
+  example file if no config exists yet, so every optional variable is
+  discoverable in one place immediately after install.
+- `install.sh` now explains the `pending: N` feature in full and asks
+  whether to set up a starter `PENDING.md` — still off by default, but no
+  longer silently invisible to a first-time installer who never reads the
+  README section for it.
+- Clearer post-install summary: states plainly what shows up immediately
+  (the two real numbers), what's optional and how to turn each on (Fable
+  tracking, pending, the background watcher, theme-drift detection), and
+  where the config lives.
+
+### Changed
+- The optional config file is renamed from `usage-calibrator.env` to
+  `claude-quota-gauge.env` (matching the project name) — both the example
+  in `config/` and the default path `load_env_file()` reads. Fully
+  backward compatible: if the new file doesn't exist, `load_env_file()`
+  falls back to the old filename automatically, so upgrading the scripts
+  alone never breaks an existing setup.
+
 ## [0.6.0] - 2026-07-10
 
 ### Added
