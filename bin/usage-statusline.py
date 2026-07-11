@@ -138,8 +138,14 @@ def main():
             # watcher's threshold checks are better off with a slightly-old
             # number than none. The explicit command text remains only as
             # the fallback when there's no cached % to show at all.
+            #
+            # "refreshes next msg" rather than the generic "refreshing…":
+            # the refresh trigger is the user's own next message (that's
+            # when the hook nudge fires and the recalibration runs), so
+            # naming the trigger tells them they can just keep working --
+            # nothing here is worth sitting and waiting for.
             if "fable_pct" in cache:
-                parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, cached=True))
+                parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, note="refreshes next msg"))
             else:
                 parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
         else:

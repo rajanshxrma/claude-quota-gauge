@@ -585,18 +585,25 @@ def fmt_delta(epoch_target, now):
     return f"{h}h {m}m"
 
 
-def fmt_window(label, pct, resets_at, now, cached=False):
+def fmt_window(label, pct, resets_at, now, cached=False, note=None):
     """Formats one usage row, e.g. '5h: 18% (resets 4h 58m)'. Once resets_at
     has passed, the window has crossed its reset boundary server-side but a
     fresh reading hasn't landed yet (nothing refreshes the % until the next
     real rate_limits payload arrives) -- shown as an explicit 'resetting...'
     state carrying the last known % instead of a stale countdown stuck at
-    "now", which is indistinguishable from the tool having hung."""
+    "now", which is indistinguishable from the tool having hung.
+
+    `note` replaces the default cached-state marker with caller-specific
+    wording -- the tracked-model row uses it to say *when* its refresh
+    happens ("refreshes next msg") rather than the passive "refreshing…",
+    which reads like something worth waiting for when the actual trigger is
+    the user's own next message. Passing note implies the cached rendering."""
     if resets_at is not None and (resets_at - now.timestamp()) <= 0:
         return f"{label}: resetting... (was {pct:.0f}%)"
     resets = fmt_delta(resets_at, now)
-    if cached:
-        tail = f" (refreshing…), resets {resets}" if resets else " (refreshing…)"
+    if cached or note:
+        marker = note or "refreshing…"
+        tail = f" ({marker}), resets {resets}" if resets else f" ({marker})"
     else:
         tail = f" (resets {resets})" if resets else ""
     return f"{label}: {pct:.0f}%{tail}"

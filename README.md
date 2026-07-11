@@ -26,7 +26,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.8.4-informational)
+![version](https://img.shields.io/badge/version-0.8.5-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -183,12 +183,13 @@ calibration time from the same snapshot) — what's left is precisely the
 "usage happened somewhere this projection can't see" signal, which is why
 the threshold can sit at 2 points without false alarms on heavy CLI days.
 
-In the bar, staleness looks calm, not alarming: the last known % stays up
-with the same `(refreshing…)` marker the 5-hour/weekly numbers use while
-awaiting fresh data — because recalibration is Claude's job now (see the
-hooks below), not a chore the bar needs to assign you. The explicit
-`stale, run /gauge-calibrate` text appears only when there's no last known
-number to show at all. Likewise, before a cap has ever been derived (e.g.
+In the bar, staleness looks calm, not alarming: the last known % stays up,
+marked `(refreshes next msg)` — because recalibration is Claude's job now
+(see the hooks below), not a chore the bar needs to assign you. The marker
+names its trigger on purpose: the refresh happens automatically as part of
+your next message to any session, so there's nothing to sit and wait for —
+just keep working. The explicit `stale, run /gauge-calibrate` text appears
+only when there's no last known number to show at all. Likewise, before a cap has ever been derived (e.g.
 right after install), it shows the honest number (`0%`, since that's the
 only way a cap couldn't be derived yet) rather than an error state — same
 principle as the 5-hour/weekly-all numbers never showing a scary
