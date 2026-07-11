@@ -12,8 +12,8 @@ TOKENS_SINCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens-
 # forever, since it multiplied by cal["pct"]. The cap model has no such
 # freeze -- it projects live local usage against a fixed denominator.
 #
-# CAP_MAX_AGE used to be 14 days on the (wrong) assumption that the cap is
-# slow-moving. It isn't the cap that drifts fastest -- it's the *local
+# The max-age ceiling used to be 14 days on the (wrong) assumption that the
+# cap is what drifts. It isn't the cap that drifts fastest -- it's the *local
 # projection's blind spot*: tokens-since.py only sees Claude Code CLI usage,
 # never claude.ai web/mobile usage of the tracked model. Whenever a real
 # chunk of that model's usage happens off the CLI, the projection quietly
@@ -21,20 +21,34 @@ TOKENS_SINCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokens-
 # 8%->16%). A 14-day ceiling let that run for two weeks before ever forcing
 # a re-read. Tightened to a matter of hours so a stale projection can't
 # coast silently -- overridable via CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS.
-CAP_MAX_AGE = timedelta(hours=float(os.environ.get("CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS", "12")))
+#
+# Both env-tunable values are read lazily (inside fable_estimate), NOT at
+# module import: every consumer script imports this module first and calls
+# load_env_file() after, so a module-level os.environ.get() here would bake
+# in the default before the config file's overrides ever landed -- making
+# the documented knobs silently dead. The pre-existing config vars (e.g.
+# CLAUDE_USAGE_ALERT_THRESHOLD in usage-watch.py) already follow this
+# read-after-load ordering; these must too.
+def _cap_max_age():
+    return timedelta(hours=float(os.environ.get("CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS", "12")))
+
+
+# The other half of the fix: the max-age ceiling alone only catches drift
+# once it's had hours to accumulate. This catches it immediately -- if the
+# real aggregate weekly % (free, verified, on every render) has moved more
+# than this many points since the last calibration, some real usage
+# happened that the local-only projection may not have seen, so force a
+# re-read rather than trust the projection until the next max-age check.
+def _fable_drift_threshold():
+    return float(os.environ.get("CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD", "5"))
+
+
 # Local projections aren't ground truth -- if the cost-weighted local
 # estimate blows past a sane ceiling, that's a sign the cap itself has
 # drifted from reality (e.g. Anthropic adjusted the limit), not that the
 # tracked model's usage is actually >120% of the weekly pool. Report stale
 # rather than a number nobody would believe.
 PROJECTION_CEILING = 120
-# The other half of the fix: CAP_MAX_AGE alone only catches drift once it's
-# had hours to accumulate. This catches it immediately -- if the real
-# aggregate weekly % (free, verified, on every render) has moved more than
-# this many points since the last calibration, some real usage happened
-# that the local-only projection may not have seen, so force a re-read
-# rather than trust the projection between now and the next max-age check.
-FABLE_DRIFT_THRESHOLD = float(os.environ.get("CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD", "5"))
 
 
 def load_env_file(path="~/.claude/claude-quota-gauge.env"):
@@ -114,7 +128,7 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     from a real, non-zero settings-page read. Once that's done, the %
     itself updates live every call as local usage accrues -- no further
     browser reads needed except to occasionally re-verify the cap hasn't
-    drifted (see CAP_MAX_AGE), and the weekly window advances on its own
+    drifted (see CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS), and the weekly window advances on its own
     at the real reset boundary (analytically, from rate_limits' own
     resets_at when available) -- also no browser read needed.
 
@@ -135,10 +149,10 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
 
     `current_seven_day_pct` (optional -- the real, free aggregate weekly %
     from the same rate_limits payload/cache the caller already has) is the
-    fast half of that same guarantee: CAP_MAX_AGE alone only forces a
+    fast half of that same guarantee: the max-age ceiling alone only forces a
     re-read after it's had hours to go stale. Comparing against the
     aggregate catches drift the moment it happens -- if real account-wide
-    usage has moved more than FABLE_DRIFT_THRESHOLD points since this
+    usage has moved more than CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD points since this
     calibration, something happened that the local-only projection may not
     have seen (e.g. the tracked model used outside this CLI), so report
     stale immediately rather than keep projecting a number that's already
@@ -205,7 +219,7 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
         cap_derived_at = datetime.fromisoformat(cap_derived_at_raw)
     except Exception:
         return {"tracked_model": tracked_model, "stale": True}
-    if now - cap_derived_at > CAP_MAX_AGE:
+    if now - cap_derived_at > _cap_max_age():
         return {"tracked_model": tracked_model, "stale": True}
 
     seven_day_pct_at_cal = cal.get("seven_day_pct_at_cal")
@@ -213,7 +227,7 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
         not rolled_over
         and current_seven_day_pct is not None
         and seven_day_pct_at_cal is not None
-        and abs(current_seven_day_pct - seven_day_pct_at_cal) > FABLE_DRIFT_THRESHOLD
+        and abs(current_seven_day_pct - seven_day_pct_at_cal) > _fable_drift_threshold()
     ):
         return {"tracked_model": tracked_model, "stale": True}
 
@@ -274,7 +288,7 @@ def fable_stale_to_announce(session_id, now):
     """Mid-session counterpart to the `SessionStart` staleness nudge in
     usage-session-hook.py: that one only fires once, at a session's launch,
     so a session that runs long enough to cross the staleness threshold
-    (CAP_MAX_AGE or FABLE_DRIFT_THRESHOLD) partway through would otherwise
+    (max-age or the drift tripwire) partway through would otherwise
     sit stale for the rest of that session with nothing to prompt a fix.
     Called from the UserPromptSubmit hook so it re-checks on every prompt --
     same shape as theme_drift_to_announce() below, for the same reason
