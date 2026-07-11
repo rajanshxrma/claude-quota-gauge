@@ -4,6 +4,41 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-11
+
+### Fixed
+- **The tracked-model (Fable) weekly estimate could be badly wrong while
+  reporting itself perfectly healthy.** It showed 16% used when the real
+  `claude.ai/settings/usage` page read 40% — a 24-point silent miss. Root
+  cause: the estimate has always been projected entirely from local Claude
+  Code transcript tokens (`tokens-since.py`), which is structurally blind to
+  that model's usage through claude.ai web, mobile, or another machine. It
+  tracked closely early on only because virtually all of that usage
+  happened to be CLI-only at the time; as usage elsewhere grew, drift was
+  inevitable and had no way to surface itself — `CAP_MAX_AGE` was 14 days,
+  and nothing compared the projection against any other real signal in
+  between.
+- Two independent fixes, both in `fable_estimate()`: `CAP_MAX_AGE` tightened
+  from 14 days to `CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` (default 12h), and
+  a new fast tripwire — `usage-calibrate-fable.py` now also records the
+  real, free aggregate weekly % (`seven_day_pct_at_cal`) at calibration
+  time; every later read compares it against the current real aggregate and
+  reports stale immediately if it's moved more than
+  `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` points (default 5) — a fast signal
+  that account-wide usage moved in a way the local-only projection may not
+  have caught. The existing SessionStart auto-recalibration nudge
+  (`usage-session-hook.py`, shipped since v0.3.0) already tells the next
+  session to recalibrate immediately whenever the estimate is stale — this
+  fix is what makes that mechanism actually fire when it should.
+
+### Changed
+- Renamed `/gauge-cali-fable` → `/gauge-calibrate`. The tool already
+  generalizes over `CLAUDE_USAGE_TRACK_MODEL`; Fable is just today's only
+  model with a hidden separate weekly pool, so the command name was
+  needlessly narrow. Internal identifiers (`usage-calibrate-fable.py`,
+  `fable_estimate()`, `fable_*` cache keys) are unchanged — only the
+  command file and user-facing strings moved.
+
 ## [0.7.0] - 2026-07-10
 
 ### Fixed

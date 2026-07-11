@@ -69,6 +69,14 @@ def main():
 
     next_reset = datetime.fromtimestamp(resets_at, tz=timezone.utc)
     window_start = next_reset - timedelta(days=7)
+    # The real, verified aggregate weekly % at the moment of this
+    # calibration -- the tripwire in fable_estimate() compares this against
+    # the *current* real aggregate on every later read. A big gap between
+    # them means account-wide usage has moved in a way the local-token
+    # projection may not have seen (e.g. the tracked model used outside this
+    # CLI), so that's the signal used to force a re-read rather than trust a
+    # stale local-only projection indefinitely.
+    seven_day_pct_at_cal = cache.get("seven_day_pct")
 
     tokens = json.loads(
         subprocess.check_output(
@@ -85,6 +93,7 @@ def main():
         "window_start": window_start.isoformat(),
         "next_reset": next_reset.isoformat(),
         "tokens_at_cal": tracked_tokens,
+        "seven_day_pct_at_cal": seven_day_pct_at_cal,
     }
 
     if pct > 0:

@@ -104,9 +104,9 @@ def main():
     # number moved without a window rollover) even when no session is open
     # to notice via the statusline. Deduped on the calibration's own
     # calibrated_at so it renotifies once per stale calibration, then again
-    # after the next /gauge-cali-fable.
+    # after the next /gauge-calibrate.
     now = datetime.datetime.now(datetime.timezone.utc)
-    fable = fable_estimate(now, cache.get("seven_day_resets_at"))
+    fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
     if fable and fable.get("stale"):
         cal_marker = None
         if os.path.exists(FABLE_CAL_PATH):
@@ -118,7 +118,7 @@ def main():
         if state.get("fable_stale_notified_for") != cal_marker:
             notify(
                 "Claude usage",
-                f"{fable['tracked_model']} weekly estimate is stale -- run /gauge-cali-fable",
+                f"{fable['tracked_model']} weekly estimate is stale -- run /gauge-calibrate",
             )
             state["fable_stale_notified_for"] = cal_marker
             changed = True

@@ -20,10 +20,13 @@ Claude Max) that `rate_limits` doesn't break out, there's an optional
 add-on for that too — see [Optional: per-model weekly tracking](#optional-per-model-weekly-tracking-eg-fable).
 It's the one number in this tool that isn't straight from Anthropic's
 backend; it's calibrated by hand against the real settings page once to
-derive a weekly cap, then projected live from local usage against that cap,
-but tracks closely enough that it's shown the same way as the two above it.
+derive a weekly cap, then projected live from local usage against that cap.
+Unlike the two numbers above it, it's an estimate with a real, known blind
+spot (it can't see that model's usage outside this CLI) — it leans hard
+toward reporting itself stale rather than showing a confident wrong number;
+see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.7.0-informational)
+![version](https://img.shields.io/badge/version-0.8.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -124,6 +127,8 @@ need — it's loaded automatically, including by the statusline command, the
 |---|---|---|
 | `CLAUDE_USAGE_PENDING_FILE` | `./PENDING.md`, then `~/.claude/PENDING.md` | See the PENDING.md convention below |
 | `CLAUDE_USAGE_TRACK_MODEL` | `fable` | Which model gets the optional calibrated weekly tracking — see below |
+| `CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` | `12` | Hours a calibration can go unverified before the tracked-model estimate reports stale — see below |
+| `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` | `5` | Points the real weekly-all-models % can move from its value at calibration before the estimate reports stale immediately — see below |
 | `CLAUDE_USAGE_ALERT_THRESHOLD` | `85` | % that triggers a desktop notification |
 | `CLAUDE_USAGE_THEME_WATCH` | unset (off) | macOS-only: flags UI theme staleness in the background — see below |
 
@@ -155,45 +160,49 @@ from the shared pool — there's no API for that figure. This add-on fills
 that one gap with a local, cost-weighted projection: one real read off the
 settings page derives a weekly $ cap (`bin/usage-calibrate-fable.py`), and
 `bin/tokens-since.py` then projects live local usage against that fixed cap
-on every render — no re-scraping needed as usage accrues, and no browser
-automation running in the background either.
+on every render — no browser automation running in the background.
 
-It's shown in the statusline the same way as the two real numbers, with no
-separate confidence label — the cost-weighting keeps it tracking closely.
-Unlike the two real numbers, this one does need an occasional real read to
-keep the cap itself honest (Anthropic's limit can change), so it reports
-staleness explicitly rather than showing a number nobody could trust — but
-only when there's genuine reason to distrust it: the cap hasn't been
-re-verified in ~2 weeks, or the local projection blows past a sane
-ceiling. Before a cap has ever been derived at all (e.g. right after
-install, before you've used the tracked model this week), it doesn't show
-an alarming `stale, run this command` message — same principle as the
-5-hour/weekly-all numbers never showing a scary `unavailable` when a real
-cached number is already known. It shows the honest number instead (`0%`,
-since that's the only way a cap couldn't be derived yet) for exactly as
-long as that stays true — the moment local transcripts show tracked-model
-usage with no cap to project it against, it flags for one recalibration,
-and that first non-zero read derives the cap and makes the number fully
-live from then on.
+**Know its real limitation:** the projection only sees usage of the tracked
+model through *this* Claude Code CLI. It's blind to that model used via
+claude.ai web, mobile, or another machine — if a meaningful share of your
+usage happens there, the projected % quietly falls behind the real one
+between calibrations (this is exactly what a real 8%→40% week looked like
+locally: only 8%→16%). It is not a substitute for the real number on the
+settings page, only the closest available estimate between checks of it.
+
+Because of that, it leans hard toward flagging itself stale rather than
+showing a confident wrong number: it reports stale the moment the cap
+hasn't been re-verified in `CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` (default
+12h), *or* the moment the real weekly-all-models % (free on every render)
+has moved more than `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` points (default 5)
+since the last calibration — a fast signal that account-wide usage moved in
+a way the local-only projection may not have caught. Before a cap has ever
+been derived at all (e.g. right after install), it doesn't show an alarming
+`stale, run this command` message — same principle as the 5-hour/weekly-all
+numbers never showing a scary `unavailable` when a real cached number is
+already known. It shows the honest number instead (`0%`, since that's the
+only way a cap couldn't be derived yet) for exactly as long as that stays
+true.
 
 The weekly window itself resets on its own with no browser read needed —
 it advances to the real reset boundary Anthropic reports (the same one the
 weekly-all-models number uses), so the projection naturally zeroes out
 right after a rollover.
 
-Setup, one time:
+You'll rarely need to run the recalibration by hand: whenever it's stale,
+the SessionStart hook tells Claude to recalibrate immediately at the start
+of your next session — no need to ask first, since viewing a settings page
+has no side effects. Setup, one time (or to trigger it yourself):
 
 ```bash
-/gauge-cali-fable
+/gauge-calibrate
 ```
 
 This drives the browser to `claude.ai/settings/usage`, reads the real %
 for whatever `CLAUDE_USAGE_TRACK_MODEL` is set to (default `fable`), and
-derives the cap from it. Re-run it whenever the statusline reports it
-stale, or occasionally to re-verify the cap — Claude does this on its own
-once told to, since viewing a settings page has no side effects. A 0%
-reading can't derive a cap (nothing used yet to calibrate against), so it
-keeps whatever cap is already on file rather than discarding it.
+derives the cap from it. A 0% reading can't derive a cap (nothing used yet
+to calibrate against), so it keeps whatever cap is already on file rather
+than discarding it.
 
 ## Optional: UI theme staleness (macOS only)
 

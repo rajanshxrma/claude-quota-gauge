@@ -1,5 +1,5 @@
 ---
-description: Refresh the per-model (e.g. Fable) weekly % estimate from claude.ai/settings/usage -- the one number rate_limits doesn't expose
+description: Refresh the tracked model's (default Fable) weekly % estimate from claude.ai/settings/usage -- the one number rate_limits doesn't expose
 ---
 
 Do this now, without waiting to be asked -- viewing a settings page has no side effects:
