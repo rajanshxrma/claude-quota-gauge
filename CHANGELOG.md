@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.5] - 2026-07-11
+
+### Changed
+- The stale tracked-model row's marker is now `(refreshes next msg)`
+  instead of the generic `(refreshing…)`. The passive wording read like
+  something worth waiting for, when the actual trigger is the user's own
+  next message (that's when the hook nudge fires and the recalibration
+  runs) — naming the trigger tells them to just keep working. The
+  5-hour/weekly rows keep `(refreshing…)`: their cached-fallback state is
+  a different mechanism that resolves on its own. `fmt_window()` gains an
+  optional `note` parameter for caller-specific cached-state wording.
+
 ## [0.8.4] - 2026-07-11
 
 ### Changed
