@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] - 2026-07-14
+
+### Changed
+- Refreshed the hero GIF: it now shows the real combined statusline — model +
+  effort, the 5h / weekly / Fable %, the pending count and session id, with the
+  workload gauge line (compute / io / ram) beneath it. The old one predated the
+  workload gauge.
+- Added a `/pending` narrative GIF (`docs/pending-demo.gif`) to the PENDING.md
+  section: parking a thought bumps the statusline's count from 5 to 6 on the
+  next render.
+
 ## [0.9.3] - 2026-07-14
 
 ### Added

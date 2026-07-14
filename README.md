@@ -4,7 +4,7 @@ Your real Claude Max quota %, in your terminal, straight from Claude Code
 itself — no scraping, no stored credentials, no estimating for the two
 numbers Anthropic actually reports.
 
-![demo: a session starting with the usage snapshot already known, parking an item with /pending, and the next session's snapshot reflecting it](docs/demo.gif)
+![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, a pending count and the session id, with the workload gauge line (compute / io / ram → verdict) rendering beneath it](docs/demo.gif)
 
 Since Claude Code v2.1.80, the statusline command is fed a `rate_limits`
 field on stdin — the exact 5-hour and weekly used-percentage Anthropic's own
@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.9.3-informational)
+![version](https://img.shields.io/badge/version-0.9.4-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -223,6 +223,8 @@ can pick one up without re-deriving context. `usage-statusline.py` counts the
 headings (excluding ones with "RESOLVED" in the title) and surfaces it as
 `pending: N` in your statusline — a standing, ambient reminder that
 something's still open. See `examples/PENDING.md` for the shape.
+
+![parking a thought with /pending mid-session: the statusline's pending count goes from 5 to 6 on the very next render](docs/pending-demo.gif)
 
 Off by default, on purpose — `pending: N` only appears once a `PENDING.md`
 actually exists. `install.sh` walks you through this explicitly (explains
