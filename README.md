@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.9.1-informational)
+![version](https://img.shields.io/badge/version-0.9.2-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -142,7 +142,7 @@ parallel for free and work you have to run one job at a time.
 A sample line:
 
 ```
-⚙ compute 99% io 41% → serialize·GPU  ⚠swap
+⚙ compute 99% io 41% ram 76% → serialize·GPU  ⚠swap
 ```
 
 Reading it left to right:
@@ -152,8 +152,9 @@ Reading it left to right:
 | `⚙` | Class glyph — `⚙` compute-bound · `⇄` I/O-bound · `·` idle · `◐` mixed/not saturated |
 | `compute 99%` | **Compute gauge** — the dominant chip peg, `max(CPU busy, GPU util)`. How hard the chips are actually working. |
 | `io 41%` | **I/O gauge** — disk + network throughput saturation (a soft curve; 40 MB/s reads ~50%). |
+| `ram 76%` | **RAM gauge** — memory pressure as used % (`100 − free`), so it reads the same direction as the other two: high = tight. |
 | `→ serialize·GPU` | The verdict and the advice that follows. `·GPU`/`·CPU` names the pegged chip. |
-| `⚠swap` | RAM is the real bottleneck — you're in swap (>1 GB) or under 20% free. Trumps the other two: don't stack big models regardless of the chip verdict. This marker only appears when RAM is the problem; no marker means memory is fine. |
+| `⚠swap` | RAM has become the real bottleneck — you're in swap (>1 GB) or under 20% free. Trumps the chip verdict: don't stack big models. This marker fires on top of the `ram` gauge only once memory is actually the problem. |
 
 **The number colors are intensity, not class** — green under 50%, yellow 50–79%,
 red 80%+. So `compute 99%` in red means the chips are slammed; `io 41%` in green
