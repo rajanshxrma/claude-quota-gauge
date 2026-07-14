@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.5] - 2026-07-14
+
+### Changed
+- Re-recorded the statusline GIFs (hero + `/pending`) larger and more legible.
+  The long single-line statusline was shrinking to tiny text on GitHub; they
+  now wrap it at `|` boundaries (full session id kept) with a bigger font and a
+  terminal frame, so the text renders crisp instead of as a thin wide strip.
+
 ## [0.9.4] - 2026-07-14
 
 ### Changed
