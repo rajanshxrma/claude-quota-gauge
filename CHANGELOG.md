@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-07-14
+
+### Added
+- The workload bar now shows an always-on `ram` gauge next to `compute`/`io` —
+  memory pressure as used % (`100 − free`), colored the same way (green <50,
+  yellow <80, red 80+). The `⚠swap` marker still fires separately once RAM is
+  actually the bottleneck; the gauge just means you no longer have to wait for
+  the warning to see memory state.
+
 ## [0.9.1] - 2026-07-14
 
 ### Fixed
@@ -23,9 +32,13 @@ All notable changes to this project are documented here. Format follows
   fresh calibration resets the clock.
 
 ### Changed
-- The workload gauge bar label is spelled out for newcomers: `comp`/`io` →
-  `compute`/`i/o`. Added a section on how to read the bar (glyphs, the two
-  gauges, colors, the `⚠swap` marker).
+- The workload gauge bar spells `comp` out to `compute` for newcomers (the
+  `io` gauge keeps its short name). Added a README section on how to read the
+  bar (glyphs, the two gauges, colors, the `⚠swap` marker).
+- The `resetting…` state now uses the same ellipsis character as
+  `refreshing…` — they mark two different states (a window that actually
+  crossed its reset boundary vs. a cached number awaiting a live read), but
+  they now read as one consistent style.
 
 ## [0.9.0] - 2026-07-13
 
