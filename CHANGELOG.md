@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.3] - 2026-07-14
+
+### Added
+- A demo GIF of the full-screen workload gauge (`docs/workload-demo.gif`) in
+  the workload section — both gauges, the verdict, the CPU/GPU/RAM breakdown,
+  and the top processes, updating live.
+- `--watch N` caps the live view at N refreshes then exits (handy for scripted
+  recordings); `--watch` alone still loops until Ctrl-C.
+- The gauge honors `CLICOLOR_FORCE=1` to keep color through a pipe (the
+  standard env `ls`/`grep` use), so a recorder capturing the piped output still
+  gets the colored view.
+
 ## [0.9.2] - 2026-07-14
 
 ### Added

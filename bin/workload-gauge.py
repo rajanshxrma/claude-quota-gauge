@@ -37,13 +37,17 @@ Usage:
                               auto-spawned by --segment, self-exits when idle
 """
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 
 # ---- ANSI (skipped when not a TTY or when --json) ---------------------------
-_TTY = sys.stdout.isatty()
+# CLICOLOR_FORCE=1 forces color even through a pipe (the de-facto standard env,
+# same one `ls`/`grep` honor) -- lets a recorder like asciinema capture the
+# colored --watch view even though its capture pipe isn't a TTY.
+_TTY = sys.stdout.isatty() or os.environ.get("CLICOLOR_FORCE") == "1"
 def c(code, s):
     return f"\033[{code}m{s}\033[0m" if _TTY else s
 DIM, BOLD = "2", "1"
@@ -64,7 +68,6 @@ IO_KNEE_MBPS = 40.0
 # nothing runs when no Claude session is open. If the writer dies and the
 # cache ages past STALE_AFTER, the segment shows a ⚠ rather than a stale
 # number -- exactly the "we don't want it stale" guarantee.
-import os
 _DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_PATH = os.path.join(_DIR, ".workload-gauge-cache.json")
 KEEPALIVE = os.path.join(_DIR, ".workload-gauge-keepalive")
@@ -427,13 +430,21 @@ def main():
         print(json.dumps(sample(), indent=2))
         return
     if "--watch" in args:
+        # An optional integer after --watch caps the number of refreshes then
+        # exits (e.g. `--watch 8`) -- handy for a scripted recording; without it
+        # it loops until Ctrl-C.
+        idx = args.index("--watch")
+        cap = int(args[idx + 1]) if idx + 1 < len(args) and args[idx + 1].isdigit() else None
+        frames = 0
         try:
-            while True:
+            while cap is None or frames < cap:
                 s = sample()
                 sys.stdout.write("\033[2J\033[H" if _TTY else "")
                 print(render(s))
                 sys.stdout.flush()
-                time.sleep(1)  # sample() itself already costs ~1s
+                frames += 1
+                if cap is None or frames < cap:
+                    time.sleep(1)  # sample() itself already costs ~1s
         except KeyboardInterrupt:
             print()
         return
