@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.9.2-informational)
+![version](https://img.shields.io/badge/version-0.9.3-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -131,6 +131,8 @@ The second line of the bar answers one question: is this machine *waiting* or
 *calculating* right now? That's the line between work you can stack in
 parallel for free and work you have to run one job at a time.
 
+![the workload gauge full-screen: compute/io/ram gauges, the serialize-vs-parallelize verdict, a CPU/GPU/RAM breakdown, and the top processes eating the machine](docs/workload-demo.gif)
+
 - **I/O-bound** — the bottleneck is waiting on something external (network, a
   download, disk, an API, CI, you typing). The chips sit idle, so overlapping
   many such jobs is basically free. Glyph `⇄`, verdict `parallelize`.
@@ -139,13 +141,20 @@ parallel for free and work you have to run one job at a time.
   splits the same 100%, so these run best one at a time. Glyph `⚙`, verdict
   `serialize·CPU` or `serialize·GPU` naming which chip is the wall.
 
-A sample line:
+A sample line, annotated:
 
 ```
-⚙ compute 99% io 41% ram 76% → serialize·GPU  ⚠swap
+⚙  compute 99%  io 41%  ram 76%  → serialize·GPU  ⚠swap
+│      │           │        │          │            │
+│      │           │        │          │            └─ RAM has become the bottleneck (see below)
+│      │           │        │          └─ the verdict + which chip is the wall
+│      │           │        └─ ram gauge — memory pressure (used %)
+│      │           └─ io gauge — how much data is flowing
+│      └─ compute gauge — how pegged the chips are
+└─ class glyph — this is what tells you the kind of workload
 ```
 
-Reading it left to right:
+The same elements as a reference:
 
 | Element | Meaning |
 | --- | --- |
