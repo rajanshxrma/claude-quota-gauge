@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] - 2026-07-14
+
+### Changed
+- Re-recorded the hero GIF again -- 0.9.5's fix (wrapping the statusline at `|`
+  boundaries with a bigger font) traded the old tiny-strip problem for a
+  cramped, ugly 4-line wrap. Reverted to the tool's real unwrapped 2-line
+  layout (matching how the statusline actually renders) and stretched it into
+  a short two-beat recording -- holds on an I/O-bound moment, then updates in
+  place to a compute-bound one -- so it also demonstrates the workload gauge's
+  two states instead of sitting on one static frame.
+
 ## [0.9.5] - 2026-07-14
 
 ### Changed
