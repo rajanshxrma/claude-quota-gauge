@@ -402,7 +402,7 @@ def segment():
     vcolor = {"compute": MAG, "io": CYA, "idle": DIM, "mixed": YEL}[d["class"]]
     comp = sc(color_for(d["compute_pct"]), f"{int(d['compute_pct'])}%")
     io = sc(color_for(d["io_pct"]), f"{int(d['io_pct'])}%")
-    out = f"{glyph} comp {comp} io {io} {sc(vcolor, '→ ' + verb)}"
+    out = f"{glyph} compute {comp} io {io} {sc(vcolor, '→ ' + verb)}"
     if (d.get("swap_mb") or 0) > 1024 or (d.get("ram_free_pct") or 100) < 20:
         out += "  " + sc(RED, "⚠swap")
     return out
