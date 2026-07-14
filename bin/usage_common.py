@@ -256,7 +256,15 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
             agg_cap_est = local_total_at_cal / (seven_day_pct_at_cal / 100)
             local_delta = max(0.0, sum(tokens.values()) - local_total_at_cal)
             explained = 100 * local_delta / agg_cap_est
-            if abs(agg_delta - explained) > _fable_drift_threshold():
+            # Directional, not abs(): only the aggregate rising *more* than
+            # local usage explains signals possible off-CLI use of the tracked
+            # model (the real drift this guards). The opposite direction --
+            # aggregate lagging what local predicts -- is just the coarse
+            # integer % not having ticked up yet after ordinary CLI work, and
+            # abs() was tripping stale on that constantly (the |0 - 4.8| = 4.8
+            # false positive). The _cap_max_age() backstop still catches slow
+            # hidden drift unconditionally, so nothing real slips through here.
+            if agg_delta - explained > _fable_drift_threshold():
                 return {"tracked_model": tracked_model, "stale": True}
         elif abs(agg_delta) > max(_fable_drift_threshold(), 5):
             return {"tracked_model": tracked_model, "stale": True}
@@ -362,6 +370,43 @@ def fable_stale_to_announce(session_id, now):
     state[session_id] = entry
     _save_fable_stale_state(state, now)
     return fable["tracked_model"]
+
+
+def fable_stale_elapsed(cache, now):
+    """How long the *current* stale episode has run, for the statusline to
+    decide whether the calm "refreshes next msg!" label is still honest or
+    whether the auto-heal has demonstrably missed its window and a louder
+    nudge is owed (see fable_estimate()'s docstring on the CLI-blind-spot
+    drift this exists to catch, and _cap_max_age() for the grace window).
+
+    Keyed to the calibration's own identity (calibrated_at), same pattern as
+    fable_stale_to_announce() above -- so a fresh calibration always resets
+    the clock, even if the estimate immediately goes stale again for some
+    other reason (e.g. drift), rather than inheriting a stale-since from a
+    now-irrelevant prior episode. Mutates `cache` in place (fable_stale_since
+    / fable_stale_identity) so the caller's existing cache-write covers this
+    too; caller is responsible for clearing both fields once the estimate is
+    healthy again, so a resolved episode doesn't leave a stale clock ticking
+    for the next one to inherit by accident."""
+    identity = None
+    if os.path.exists(FABLE_CAL_PATH):
+        try:
+            with open(FABLE_CAL_PATH) as f:
+                identity = json.load(f).get("calibrated_at")
+        except Exception:
+            pass
+
+    if cache.get("fable_stale_identity") != identity:
+        cache["fable_stale_identity"] = identity
+        cache["fable_stale_since"] = now.isoformat()
+
+    try:
+        since = datetime.fromisoformat(cache["fable_stale_since"])
+    except Exception:
+        since = now
+        cache["fable_stale_since"] = now.isoformat()
+
+    return now - since
 
 
 THEME_STATE_PATH = os.path.expanduser("~/.claude/scripts/theme-state.json")
@@ -599,7 +644,7 @@ def fmt_window(label, pct, resets_at, now, cached=False, note=None):
     which reads like something worth waiting for when the actual trigger is
     the user's own next message. Passing note implies the cached rendering."""
     if resets_at is not None and (resets_at - now.timestamp()) <= 0:
-        return f"{label}: resetting... (was {pct:.0f}%)"
+        return f"{label}: resetting… (was {pct:.0f}%)"
     resets = fmt_delta(resets_at, now)
     if cached or note:
         marker = note or "refreshing…"

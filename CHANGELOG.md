@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-07-14
+
+### Fixed
+- The Fable weekly estimate no longer false-goes-stale on ordinary CLI use.
+  The drift tripwire compared `abs(aggregate_moved − what_local_explains)`,
+  but ordinary local usage grows the "explained" term while the coarse integer
+  aggregate % lags behind — so `abs(0 − 4.8)` tripped stale constantly. It now
+  trips only when the aggregate rises *more* than local usage explains (the
+  real off-CLI-usage signal); the cap-age ceiling still backstops slow hidden
+  drift, so nothing genuine slips through.
+
+### Added
+- Staleness escalation: once a stale episode outlives one grace window (one
+  cap-age), the bar switches from the calm `refreshes next msg` to an explicit
+  `stale Nh — /gauge-calibrate`, since the auto-heal nudge can be missed by a
+  busy session. Tracks the episode against the calibration's own identity so a
+  fresh calibration resets the clock.
+
+### Changed
+- The workload gauge bar label is spelled out for newcomers: `comp`/`io` →
+  `compute`/`i/o`. Added a section on how to read the bar (glyphs, the two
+  gauges, colors, the `⚠swap` marker).
+
 ## [0.9.0] - 2026-07-13
 
 ### Added

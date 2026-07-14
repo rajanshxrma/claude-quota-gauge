@@ -35,7 +35,7 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model, right_align  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model, right_align, fable_stale_elapsed, _cap_max_age  # noqa: E402
 
 load_env_file()
 
@@ -125,7 +125,7 @@ def main():
         cache["fable_tracked_model"] = fable["tracked_model"]
         cache["fable_stale"] = fable["stale"]
         if fable["stale"]:
-            # Staleness is Claude's problem now, not the user's: the
+            # Staleness is Claude's problem first, not the user's: the
             # SessionStart and UserPromptSubmit hooks both tell Claude to
             # recalibrate automatically the moment they see this flag, so
             # the alarming "stale, run /gauge-calibrate" bar text (from when
@@ -144,7 +144,26 @@ def main():
             # when the hook nudge fires and the recalibration runs), so
             # naming the trigger tells them they can just keep working --
             # nothing here is worth sitting and waiting for.
-            if "fable_pct" in cache:
+            #
+            # But that hand-off is best-effort, not guaranteed: the nudge is
+            # background context a busy session can reasonably deprioritize,
+            # or that never fires at all if no prompt comes in. A real
+            # episode (2026-07-11 to -13) sat stale ~31h across 4 sessions
+            # that each got the nudge and didn't act on it, with the bar
+            # calmly claiming a same-message fix the whole time. Past one
+            # grace window (one _cap_max_age -- the auto-heal's fair shot),
+            # the calm framing is no longer honest, so switch to an explicit
+            # elapsed-time call to action instead of repeating a promise
+            # that's already been broken once this episode.
+            elapsed = fable_stale_elapsed(cache, now)
+            if elapsed > _cap_max_age():
+                hours = elapsed.total_seconds() / 3600
+                note = f"stale {hours:.0f}h — /gauge-calibrate"
+                if "fable_pct" in cache:
+                    parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, note=note))
+                else:
+                    parts.append(f"{fable['tracked_model']}: {note}")
+            elif "fable_pct" in cache:
                 parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, note="refreshes next msg!"))
             else:
                 parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
@@ -152,6 +171,12 @@ def main():
             parts.append(fmt_window(fable["tracked_model"], fable["pct"], fable["resets_at"], now))
             cache["fable_pct"] = fable["pct"]
             cache["fable_resets_at"] = fable["resets_at"]
+            # Resolved -- clear any stale-episode clock so a future episode
+            # (even against this same calibration, e.g. immediate re-drift)
+            # starts its grace window fresh rather than inheriting elapsed
+            # time from an episode that's already over.
+            cache.pop("fable_stale_since", None)
+            cache.pop("fable_stale_identity", None)
 
     os.makedirs(SCRIPTS, exist_ok=True)
     with open(CACHE_PATH, "w") as f:
