@@ -15,6 +15,14 @@ your browser, touches an API key, or approximates anything — every number
 shown is the same one `claude.ai/settings/usage` would show you, because
 it's the same data, straight from Claude Code.
 
+The bar carries a second line too: a **workload gauge** that tells an
+I/O-bound session apart from a compute-bound one, so you know at a glance
+whether to stack jobs in parallel or run them one at a time. It reads the
+same signals Activity Monitor does — CPU, GPU, RAM/swap — with no `sudo`
+prompt, and it's kept fresh by a background sampler without ever slowing a
+render. See [Workload gauge](#workload-gauge-io-bound-vs-compute-bound) for
+how to read it.
+
 If your account also has a separate weekly pool for one model (Fable, on
 Claude Max) that `rate_limits` doesn't break out, there's an optional
 add-on for that too — see [Optional: per-model weekly tracking](#optional-per-model-weekly-tracking-eg-fable).
@@ -26,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.8.6-informational)
+![version](https://img.shields.io/badge/version-0.9.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -62,10 +70,13 @@ for a one-time opt-in step to track that too.
 ## How it works
 
 1. **Claude Code hands the real numbers to the statusline command.** Every
-   render, it feeds `usage-statusline.py` a JSON payload on stdin that
+   render, it feeds the statusline command a JSON payload on stdin that
    includes `rate_limits.five_hour.used_percentage` and
    `rate_limits.seven_day.used_percentage` — Anthropic's own backend
-   figures, not a local approximation.
+   figures, not a local approximation. The command is `statusline.py`, a
+   thin wrapper that forwards that payload to `usage-statusline.py` (the
+   quota line) and appends the [workload gauge](#workload-gauge-io-bound-vs-compute-bound)
+   line beneath it.
 2. **The script prints the statusline and caches those numbers to disk**
    (`~/.claude/scripts/usage-live.json`), so other things — the
    `SessionStart` hook, the background watcher — can read the latest known
@@ -113,6 +124,68 @@ stdin payload carries it), e.g. `session: 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`.
 If a long-running session gets close to a usage limit, copy that ID and run
 `claude --resume <id>` in a fresh terminal window to pick it back up —
 `--resume` needs the whole UUID, so a shortened prefix won't work.
+
+## Workload gauge (I/O-bound vs compute-bound)
+
+The second line of the bar answers one question: is this machine *waiting* or
+*calculating* right now? That's the line between work you can stack in
+parallel for free and work you have to run one job at a time.
+
+- **I/O-bound** — the bottleneck is waiting on something external (network, a
+  download, disk, an API, CI, you typing). The chips sit idle, so overlapping
+  many such jobs is basically free. Glyph `⇄`, verdict `parallelize`.
+- **Compute-bound** — a chip (CPU or GPU) is pegged near 100% doing math
+  (training, local inference, video encode, a big compile). A second job just
+  splits the same 100%, so these run best one at a time. Glyph `⚙`, verdict
+  `serialize·CPU` or `serialize·GPU` naming which chip is the wall.
+
+A sample line:
+
+```
+⚙ comp 99% io 41% → serialize·GPU  ⚠swap
+```
+
+Reading it left to right:
+
+| Element | Meaning |
+| --- | --- |
+| `⚙` | Class glyph — `⚙` compute-bound · `⇄` I/O-bound · `·` idle · `◐` mixed/not saturated |
+| `comp 99%` | **Compute gauge** — the dominant chip peg, `max(CPU busy, GPU util)`. How hard the chips are actually working. |
+| `io 41%` | **I/O gauge** — disk + network throughput saturation (a soft curve; 40 MB/s reads ~50%). |
+| `→ serialize·GPU` | The verdict and the advice that follows. `·GPU`/`·CPU` names the pegged chip. |
+| `⚠swap` | RAM is the real bottleneck — you're in swap (>1 GB) or under 20% free. Trumps the other two: don't stack big models regardless of the chip verdict. |
+
+**The number colors are intensity, not class** — green under 50%, yellow 50–79%,
+red 80%+. So `comp 99%` in red means the chips are slammed; `io 41%` in green
+means I/O is quiet. The glyph and verdict are what tell you *which kind* of
+workload it is.
+
+These are **two independent gauges, not a split that sums to 100** — "how
+pegged are the chips" and "how much data is flowing" are genuinely separate
+questions, and macOS doesn't expose a true `iowait%`, so faking one number
+would be confidently wrong. The verdict is simply whichever gauge dominates.
+You won't see `idle` unless *both* are low at once; a busy machine is always
+one of the other three.
+
+**How it stays fresh without lagging the bar.** A sample takes about a
+second — far too slow to run on every render. So the render never samples: it
+reads a cache file instantly. A small background writer (`workload-gauge.py
+--watch-cache`, auto-spawned) re-samples every ~3 seconds to keep that cache
+current, and self-exits after 90 seconds with no session watching, so nothing
+runs when you're not using Claude Code. If the writer ever dies and the cache
+goes truly stale, the line shows `⚠ stale` rather than a confident old number.
+
+**GPU with no `sudo`.** Live GPU utilization comes from `ioreg` (the
+IOAccelerator `Device Utilization %`), deliberately not `powermetrics`, so the
+gauge never prompts for a password.
+
+Run it full-screen any time for the detailed view — both gauges, the verdict,
+CPU/GPU/RAM breakdown, and the top processes eating the machine:
+
+```bash
+python3 ~/.claude/scripts/workload-gauge.py          # one reading
+python3 ~/.claude/scripts/workload-gauge.py --watch   # live, refreshes each second
+```
 
 ## Configuration
 

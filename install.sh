@@ -58,7 +58,7 @@ read -r -p "Wire the statusline and hooks into ~/.claude/settings.json now? [Y/n
 REPLY="${REPLY:-Y}"
 if [[ "$REPLY" =~ ^[Yy] ]]; then
   python3 - "$CLAUDE_DIR/settings.json" \
-    "python3 $SCRIPTS_DIR/usage-statusline.py" \
+    "python3 $SCRIPTS_DIR/statusline.py" \
     "python3 $SCRIPTS_DIR/usage-session-hook.py" \
     "python3 $SCRIPTS_DIR/theme-watch-prompt-hook.py" \
     "python3 $SCRIPTS_DIR/fable-stale-prompt-hook.py" <<'PYEOF'
@@ -85,6 +85,12 @@ if not existing_statusline:
     print(f"  set statusLine to {statusline_command}")
 elif normalize(existing_statusline) == normalize(statusline_command):
     print("  statusLine already points here, left settings.json unchanged")
+elif os.path.basename(normalize(existing_statusline)) == "usage-statusline.py":
+    # Pre-0.9.0 installs pointed straight at the quota renderer. statusline.py
+    # now wraps it and adds the workload gauge, so upgrade that old default in
+    # place -- the quota line is unchanged, the workload line is new.
+    settings["statusLine"]["command"] = statusline_command
+    print("  upgraded statusLine to the combined bar (quota + workload gauge)")
 else:
     print(f"  statusLine already set to something else ({existing_statusline!r}) -- left it alone.")
     print(f"    Add this yourself if you want ours: {{\"type\": \"command\", \"command\": \"{statusline_command}\", \"refreshInterval\": 60}}")

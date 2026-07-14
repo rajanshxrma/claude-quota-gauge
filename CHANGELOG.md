@@ -4,6 +4,28 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-13
+
+### Added
+- A workload gauge on the bar's second line: tells an I/O-bound session apart
+  from a compute-bound one (`⇄ parallelize` vs `⚙ serialize·GPU/CPU`), so you
+  know whether to stack jobs or run them one at a time. Two independent gauges
+  (compute = the dominant CPU/GPU peg; I/O = disk+network saturation) rather
+  than a faked single `iowait%` macOS doesn't expose, plus a `⚠swap` marker
+  when RAM is the real bottleneck. Live GPU utilization reads from `ioreg`, no
+  `sudo`. Full-screen `workload-gauge.py` / `--watch` also shows the CPU/GPU/RAM
+  breakdown and the top processes eating the machine.
+- The render never samples (a sample costs ~1s): it reads a cache a background
+  writer keeps fresh every ~3s and that self-exits when no session is watching,
+  so the bar stays instant and the number stays current. A dead writer surfaces
+  as `⚠ stale`, never a confident old number.
+
+### Changed
+- The statusline command is now `statusline.py`, a thin wrapper that forwards
+  the stdin payload to `usage-statusline.py` (the quota line, unchanged) and
+  appends the workload line. `install.sh` upgrades pre-0.9.0 installs pointing
+  at `usage-statusline.py` in place.
+
 ## [0.8.6] - 2026-07-11
 
 ### Changed

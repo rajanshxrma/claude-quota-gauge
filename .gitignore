@@ -1,6 +1,9 @@
 usage-live.json
 usage-watch-state.json
 usage-fable-calibration.json
+.workload-gauge-cache.json
+.workload-gauge-keepalive
+.workload-gauge-writer.lock
 *.log
 __pycache__/
 *.pyc
