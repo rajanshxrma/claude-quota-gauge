@@ -1,6 +1,6 @@
 """Shared helpers for the statusline renderer, the SessionStart hook, and the
 background watcher."""
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 from datetime import datetime, timedelta, timezone
 
 FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.json")
@@ -634,9 +634,12 @@ def fmt_window(label, pct, resets_at, now, cached=False, note=None):
     """Formats one usage row, e.g. '5h: 18% (resets 4h 58m)'. Once resets_at
     has passed, the window has crossed its reset boundary server-side but a
     fresh reading hasn't landed yet (nothing refreshes the % until the next
-    real rate_limits payload arrives) -- shown as an explicit 'resetting...'
+    real rate_limits payload arrives) -- shown as an explicit 'refreshing...'
     state carrying the last known % instead of a stale countdown stuck at
-    "now", which is indistinguishable from the tool having hung.
+    "now", which is indistinguishable from the tool having hung. Uses the
+    same wording as the cached-state marker below -- both describe a % that
+    hasn't caught up yet, and showing two different words for that read as
+    inconsistent rather than as two meaningfully different states.
 
     `note` replaces the default cached-state marker with caller-specific
     wording -- the tracked-model row uses it to say *when* its refresh
@@ -644,7 +647,7 @@ def fmt_window(label, pct, resets_at, now, cached=False, note=None):
     which reads like something worth waiting for when the actual trigger is
     the user's own next message. Passing note implies the cached rendering."""
     if resets_at is not None and (resets_at - now.timestamp()) <= 0:
-        return f"{label}: resetting… (was {pct:.0f}%)"
+        return f"{label}: refreshing… (was {pct:.0f}%)"
     resets = fmt_delta(resets_at, now)
     if cached or note:
         marker = note or "refreshing…"
@@ -664,6 +667,17 @@ RIGHT_ALIGN_MARGIN = 4
 # Set to the measured value rather than a rounder guess, since any less
 # reproduces that exact clip and any more is just unused blank space.
 
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visible_len(s):
+    """Length as it actually renders, ignoring ANSI color escapes -- the
+    workload-gauge segment embeds `\\033[...m` codes (see workload-gauge.py's
+    sc()) that count as characters to len() but draw zero columns, so any
+    right_align() padding against raw len() on colored text comes up short
+    and the right-hand cluster lands well short of the terminal edge."""
+    return len(_ANSI_RE.sub("", s))
+
 
 def right_align(left, right):
     """Right-justifies `right` against the live terminal width so it reads as
@@ -675,7 +689,11 @@ def right_align(left, right):
     RIGHT_ALIGN_MARGIN (see above). Falls back to a plain `left | right`
     join (the pre-right-align behavior) when COLUMNS isn't set (older
     Claude Code) or the terminal is too narrow for both to fit side by
-    side."""
+    side.
+
+    Measures both sides with visible_len() rather than len() so this works
+    whether `left` carries ANSI color codes (the workload segment) or not
+    (the plain usage line) without the caller needing to know or care."""
     if not right:
         return left
     if not left:
@@ -685,7 +703,7 @@ def right_align(left, right):
     except ValueError:
         columns = None
     if columns:
-        pad = columns - RIGHT_ALIGN_MARGIN - len(left) - len(right)
+        pad = columns - RIGHT_ALIGN_MARGIN - visible_len(left) - visible_len(right)
         if pad >= 1:
             return left + " " * pad + right
     return f"{left} | {right}"
