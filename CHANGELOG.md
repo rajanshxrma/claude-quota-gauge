@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.7] - 2026-07-15
+
+### Changed
+- Moved the session resume command from line 1 to line 2 (the workload gauge
+  line), right-aligned. It used to trail line 1 as a bare `session: <id>`,
+  but showing the full `claude --resume <uuid>` there (rather than a bare id
+  the reader had to reassemble the command around) made an already-dense
+  line worse — line 1 already carries model + three usage windows, while
+  line 2 usually has slack to spare. `right_align()` now measures
+  ANSI-stripped visible width (see `visible_len()` in `usage_common.py`) so
+  it still lands flush against the terminal edge even though the workload
+  segment is colored, unlike the plain-text line 1 it was originally written
+  for.
+- Re-recorded the hero and `/pending` GIFs to match — both used to show the
+  bare session id trailing line 1.
+
 ## [0.9.6] - 2026-07-14
 
 ### Changed

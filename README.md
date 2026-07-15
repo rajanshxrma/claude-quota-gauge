@@ -4,7 +4,7 @@ Your real Claude Max quota %, in your terminal, straight from Claude Code
 itself — no scraping, no stored credentials, no estimating for the two
 numbers Anthropic actually reports.
 
-![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, a pending count and the session id, with the workload gauge line (compute / io / ram → verdict) rendering beneath it](docs/demo.gif)
+![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, and a pending count, with the workload gauge line (compute / io / ram → verdict) rendering beneath it — the full `claude --resume <uuid>` right-aligned at its far edge](docs/demo.gif)
 
 Since Claude Code v2.1.80, the statusline command is fed a `rate_limits`
 field on stdin — the exact 5-hour and weekly used-percentage Anthropic's own
@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.9.6-informational)
+![version](https://img.shields.io/badge/version-0.9.7-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -119,11 +119,16 @@ configure to keep them straight.
 
 ## Resuming a session from the bar
 
-The bar also trails with this session's own full `session_id` (the same
-stdin payload carries it), e.g. `session: 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`.
-If a long-running session gets close to a usage limit, copy that ID and run
-`claude --resume <id>` in a fresh terminal window to pick it back up —
-`--resume` needs the whole UUID, so a shortened prefix won't work.
+The second (workload gauge) line also trails with this session's own full
+resume command, right-aligned at the far edge — e.g.
+`claude --resume 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`. If a long-running
+session gets close to a usage limit, copy that whole line and run it in a
+fresh terminal window to pick the session back up. It's the exact command,
+not just the bare UUID — `--resume` needs the whole ID, so a shortened
+prefix won't work, and this way there's nothing to reassemble by hand.
+It used to trail line 1 as a bare `session: <id>`, but the full command reads
+much longer, and line 1 (model + three usage windows) was already the denser
+of the two — line 2 has the slack to spare.
 
 ## Workload gauge (I/O-bound vs compute-bound)
 
