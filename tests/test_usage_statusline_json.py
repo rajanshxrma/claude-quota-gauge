@@ -11,15 +11,17 @@ usage-live.json, fable calibration, or PENDING.md -- see
 feedback-isolate-tests-from-live-state-files.md for why that separation is
 non-negotiable.
 
-Coverage (see PAIRING_SESSION_NOTES.md for what's intentionally NOT covered
-yet, and why):
+Coverage:
   - default (no-flag) text output is byte-shape unchanged
   - --json emits valid JSON whose numbers match the same-input text output
   - --json field values are correct against a known/mocked calibrated
     tracked-model state (a fake fable calibration + one fake transcript
     entry with a hand-computed expected cost)
-  - the fully-dark fallback (no rate_limits, no cache) still emits valid,
-    non-crashing JSON
+  - the fully-dark fallback (no rate_limits, no cache) emits valid JSON with
+    the correct `unavailable` reason (outdated_cli vs. no_data)
+  - the tracked-model stale sub-states (within-grace / past-grace, each with
+    and without a cached %) report the correct `stale_past_grace` /
+    `stale_elapsed_hours` / `pct` combination
 """
 import json
 import os
@@ -206,32 +208,127 @@ class JsonFlagKnownCalibratedStateTest(IsolatedHomeTestCase):
         self.assertFalse(data["tracked_model"]["stale"])
         self.assertAlmostEqual(data["tracked_model"]["pct"], expected_pct, places=6)
         self.assertEqual(data["tracked_model"]["resets_at"], next_reset_epoch)
+        # Not stale -> both stale-only fields are null, not 0/False.
+        self.assertIsNone(data["tracked_model"]["stale_elapsed_hours"])
+        self.assertIsNone(data["tracked_model"]["stale_past_grace"])
 
         # The text line must report the exact same number, just formatted.
         text_out = run_statusline(payload, home=self.home).stdout.strip()
         self.assertIn("fable: 10%", text_out)
 
 
+class JsonFlagStaleSubStatesTest(IsolatedHomeTestCase):
+    """The four stale sub-states the bar text renders as distinct human
+    copy -- within-grace vs. past-grace, each with and without a cached %
+    to fall back on -- fully reconstructed from `stale_past_grace` +
+    `stale_elapsed_hours` + `pct` rather than left as a bare `stale: bool`."""
+
+    GRACE_HOURS = 12  # matches usage_common._cap_max_age()'s default
+
+    def _write_stale_calibration(self, now, calibrated_at):
+        """A calibration whose cap_derived_at is old enough to make
+        fable_estimate() report stale=True via the max-age path."""
+        cal = {
+            "tracked_model": "fable",
+            "next_reset": (now + timedelta(days=3)).isoformat(),
+            "window_start": (now + timedelta(days=3) - timedelta(days=7)).isoformat(),
+            "cap": 100,
+            "cap_derived_at": calibrated_at.isoformat(),
+            "tokens_at_cal": 0,
+            "pct": 0,
+            "calibrated_at": calibrated_at.isoformat(),
+        }
+        cal_path = os.path.join(self.home, ".claude", "scripts", "usage-fable-calibration.json")
+        with open(cal_path, "w") as f:
+            json.dump(cal, f)
+
+    def _write_live_cache(self, calibrated_at, stale_since, fable_pct=None):
+        """Pre-seeds the cache fable_stale_elapsed() reads, so the test
+        controls elapsed time directly instead of racing a real clock.
+        `fable_stale_identity` must match the calibration's calibrated_at
+        exactly, or fable_stale_elapsed() resets the clock to "just now"."""
+        cache = {
+            "fable_stale_identity": calibrated_at.isoformat(),
+            "fable_stale_since": stale_since.isoformat(),
+        }
+        if fable_pct is not None:
+            cache["fable_pct"] = fable_pct
+            cache["fable_resets_at"] = int((datetime.now(timezone.utc) + timedelta(days=1)).timestamp())
+        cache_path = os.path.join(self.home, ".claude", "scripts", "usage-live.json")
+        with open(cache_path, "w") as f:
+            json.dump(cache, f)
+
+    def _run(self, elapsed_hours, fable_pct):
+        now = datetime.now(timezone.utc)
+        calibrated_at = now - timedelta(hours=self.GRACE_HOURS + 5)  # old enough to be stale
+        self._write_stale_calibration(now, calibrated_at)
+        self._write_live_cache(calibrated_at, now - timedelta(hours=elapsed_hours), fable_pct=fable_pct)
+        payload, _ = basic_payload(now)
+        result = run_statusline(payload, args=["--json"], home=self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout.strip())["tracked_model"]
+
+    def test_past_grace_with_cached_pct(self):
+        data = self._run(elapsed_hours=self.GRACE_HOURS + 2, fable_pct=42)
+        self.assertTrue(data["stale"])
+        self.assertTrue(data["stale_past_grace"])
+        self.assertAlmostEqual(data["stale_elapsed_hours"], self.GRACE_HOURS + 2, delta=0.1)
+        self.assertEqual(data["pct"], 42)
+
+    def test_past_grace_no_cached_pct(self):
+        data = self._run(elapsed_hours=self.GRACE_HOURS + 2, fable_pct=None)
+        self.assertTrue(data["stale"])
+        self.assertTrue(data["stale_past_grace"])
+        self.assertAlmostEqual(data["stale_elapsed_hours"], self.GRACE_HOURS + 2, delta=0.1)
+        self.assertIsNone(data["pct"])
+
+    def test_within_grace_with_cached_pct(self):
+        data = self._run(elapsed_hours=2, fable_pct=42)
+        self.assertTrue(data["stale"])
+        self.assertFalse(data["stale_past_grace"])
+        self.assertAlmostEqual(data["stale_elapsed_hours"], 2, delta=0.1)
+        self.assertEqual(data["pct"], 42)
+
+    def test_within_grace_no_cached_pct(self):
+        data = self._run(elapsed_hours=2, fable_pct=None)
+        self.assertTrue(data["stale"])
+        self.assertFalse(data["stale_past_grace"])
+        self.assertAlmostEqual(data["stale_elapsed_hours"], 2, delta=0.1)
+        self.assertIsNone(data["pct"])
+
+
 class JsonFlagUnavailableStateTest(IsolatedHomeTestCase):
     """The fully-dark case (no rate_limits, no prior cache): --json must
-    still emit valid JSON rather than crashing. The exact contract for this
-    branch is intentionally left open -- see the TODO in
-    usage-statusline.py and PAIRING_SESSION_NOTES.md -- so this test only
-    pins down what's already decided (valid JSON, old-CLI text message
-    still fires) and does not assert on the placeholder
-    data["unavailable"] shape.
-    """
+    emit valid JSON with a `data["unavailable"]` dict that names *why*,
+    mirroring the bar text's own two-variant distinction (old CLI vs. no
+    data yet) instead of a bare boolean a caller can't act on."""
 
-    def test_json_does_not_crash_when_fully_dark(self):
+    def test_outdated_cli_reason(self):
         payload = {"version": "2.1.9"}  # below MIN_VERSION, no rate_limits
         text_out = run_statusline(payload, home=self.home).stdout.strip()
-        self.assertIn("usage: unavailable", text_out)
+        self.assertIn("usage: unavailable (Claude Code 2.1.9 < 2.1.80)", text_out)
 
         json_result = run_statusline(payload, args=["--json"], home=self.home)
         self.assertEqual(json_result.returncode, 0, json_result.stderr)
-        data = json.loads(json_result.stdout.strip())  # must not raise
+        data = json.loads(json_result.stdout.strip())
         self.assertIsNone(data["five_hour"])
         self.assertIsNone(data["seven_day"])
+        self.assertEqual(data["unavailable"], {
+            "reason": "outdated_cli", "cli_version": "2.1.9", "min_version": "2.1.80",
+        })
+
+    def test_no_data_reason(self):
+        payload = {}  # no version, no rate_limits, no prior cache -- fresh install
+        text_out = run_statusline(payload, home=self.home).stdout.strip()
+        self.assertIn("usage: unavailable", text_out)
+        self.assertNotIn("Claude Code", text_out)  # must not blame a version it never saw
+
+        json_result = run_statusline(payload, args=["--json"], home=self.home)
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        data = json.loads(json_result.stdout.strip())
+        self.assertEqual(data["unavailable"], {
+            "reason": "no_data", "cli_version": None, "min_version": None,
+        })
 
 
 if __name__ == "__main__":

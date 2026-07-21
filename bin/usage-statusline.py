@@ -35,9 +35,7 @@ same data points as machine-readable JSON on stdout instead of the rendered
 bar text, so other scripts/tools can consume the live quota numbers without
 scraping the terminal string. Implemented as a `data` dict built alongside
 `parts` inside main(), one entry per bar segment -- see the comment where
-`data` is first assigned, and PAIRING_SESSION_NOTES.md for what's finished
-vs. still an open design call (the tracked-model stale states, and the
-fully-unavailable case).
+`data` is first assigned.
 """
 import sys, os, json
 from datetime import datetime, timezone
@@ -118,17 +116,18 @@ def main():
             cli_version = payload.get("version")
             if cli_version and version_lt(cli_version, MIN_VERSION):
                 parts.append(f"usage: unavailable (Claude Code {cli_version} < {MIN_VERSION})")
+                data["unavailable"] = {
+                    "reason": "outdated_cli",
+                    "cli_version": cli_version,
+                    "min_version": MIN_VERSION,
+                }
             else:
                 parts.append("usage: unavailable")
-            # TODO(pairing session): the --json contract for this fully-dark
-            # case (no rate_limits AND no cache at all) is still an open
-            # design call -- do we surface *why* (old CLI vs. no data yet vs.
-            # free-tier account, mirroring the two text variants above), or
-            # just leave five_hour/seven_day as null and let callers infer it
-            # themselves the way the bar text collapses both into one string?
-            # `data["unavailable"]` is a placeholder shape, not a decision --
-            # see PAIRING_SESSION_NOTES.md before building on it.
-            data["unavailable"] = True
+                data["unavailable"] = {
+                    "reason": "no_data",
+                    "cli_version": None,
+                    "min_version": None,
+                }
     else:
         cache["fetched_at"] = now.isoformat()
         five_hour = rate_limits.get("five_hour") or {}
@@ -156,6 +155,8 @@ def main():
     if fable:
         cache["fable_tracked_model"] = fable["tracked_model"]
         cache["fable_stale"] = fable["stale"]
+        elapsed = None
+        past_grace = None
         if fable["stale"]:
             # Staleness is Claude's problem first, not the user's: the
             # SessionStart and UserPromptSubmit hooks both tell Claude to
@@ -188,7 +189,8 @@ def main():
             # elapsed-time call to action instead of repeating a promise
             # that's already been broken once this episode.
             elapsed = fable_stale_elapsed(cache, now)
-            if elapsed > _cap_max_age():
+            past_grace = elapsed > _cap_max_age()
+            if past_grace:
                 hours = elapsed.total_seconds() / 3600
                 note = f"stale {hours:.0f}h — /gauge-calibrate"
                 if "fable_pct" in cache:
@@ -210,22 +212,25 @@ def main():
             cache.pop("fable_stale_since", None)
             cache.pop("fable_stale_identity", None)
 
-        # TODO(pairing session): this is a first-cut shape, not a finished
-        # design -- see the module docstring / PAIRING_SESSION_NOTES.md. The bar text above
-        # renders four *different* stale sub-states (never-calibrated;
-        # stale-but-within-grace showing "refreshes next msg!"; stale-past-
-        # grace showing an elapsed-hours call to action; stale with no
-        # cached % at all) as distinct human copy. Collapsing all of that
-        # into a bare `stale: bool` + last-known pct is the simplest thing
-        # that could work, but a script consuming this JSON may well want the
-        # elapsed-hours/grace-window state too, to build its own UX instead
-        # of just parroting ours. Decide that together live rather than
-        # solo here.
+        # The bar text renders four distinct stale sub-states (never-
+        # calibrated is handled separately below via `fable` being falsy;
+        # stale-within-grace showing "refreshes next msg!"; stale-past-grace
+        # showing an elapsed-hours call to action; either of the latter two
+        # with no cached % to show at all). `stale_past_grace` +
+        # `stale_elapsed_hours` alongside `pct` fully reconstruct which of
+        # those the bar would have shown, without a script having to re-derive
+        # the grace-window math itself: not stale -> both null; stale and
+        # `stale_past_grace` false -> "refreshes next msg!" territory; stale
+        # and `stale_past_grace` true -> the elapsed-hours call to action.
+        # `pct` being null in either stale case is the "no cached % at all"
+        # sub-variant.
         data["tracked_model"] = {
             "name": fable["tracked_model"],
             "stale": fable["stale"],
             "pct": fable["pct"] if not fable["stale"] else cache.get("fable_pct"),
             "resets_at": fable["resets_at"] if not fable["stale"] else cache.get("fable_resets_at"),
+            "stale_elapsed_hours": round(elapsed.total_seconds() / 3600, 2) if fable["stale"] else None,
+            "stale_past_grace": past_grace if fable["stale"] else None,
         }
     else:
         data["tracked_model"] = None
