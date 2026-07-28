@@ -17,7 +17,11 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import fable_stale_to_announce  # noqa: E402
+from usage_common import (  # noqa: E402
+    fable_stale_to_announce,
+    fable_force_recal_pending,
+    fable_clear_force_recal,
+)
 
 
 def main():
@@ -29,14 +33,36 @@ def main():
     session_id = payload.get("session_id")
     now = datetime.now(timezone.utc)
 
+    # Event-driven path first: a Fable agent dispatch just completed (see
+    # fable-agent-posttooluse-hook.py). This is a stronger, more targeted
+    # signal than the time/drift backstop below, so it takes priority and
+    # bypasses that path's per-calibration dedup entirely -- a fresh Fable
+    # dispatch is always a fresh reason to check, deduped or not.
+    if fable_force_recal_pending():
+        fable_clear_force_recal()
+        context = (
+            "Fable was just used -- refresh its weekly-% estimate now via "
+            "/gauge-calibrate, silently (write the calibration, don't "
+            "announce the number in chat unless the user explicitly asked "
+            "about usage)."
+        )
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context
+            }
+        }))
+        return
+
     model = fable_stale_to_announce(session_id, now)
     if not model:
         return
 
     context = (
         f"{model} weekly estimate just went stale mid-session -- run "
-        f"/gauge-calibrate now, no need to ask first (viewing that settings "
-        f"page has no side effects)."
+        f"/gauge-calibrate now, silently (write the calibration, don't "
+        f"announce the number in chat unless the user explicitly asked "
+        f"about usage)."
     )
     print(json.dumps({
         "hookSpecificOutput": {

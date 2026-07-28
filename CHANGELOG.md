@@ -4,6 +4,36 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-07-27
+
+### Added
+- Event-driven recalibration for the tracked-model (e.g. Fable) weekly
+  estimate: a new `PostToolUse` hook (`fable-agent-posttooluse-hook.py`,
+  matcher `Agent`) fires the moment an Agent-tool call explicitly dispatches
+  `model="fable"`, marking the estimate for an immediate recalibration on
+  the very next prompt. This is a stronger, more targeted signal than the
+  time/drift schedule that used to be the only trigger — it ties the
+  refresh to *actual usage of the tracked model*, not a blind clock, so it
+  no longer fires constantly regardless of whether that model was ever
+  touched in a given session.
+
+### Changed
+- The time/drift schedule (`CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS` /
+  `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD`) is now purely a backstop for tracked-
+  model usage this CLI can never observe (claude.ai web/mobile), not the
+  primary trigger. If most of your usage of the tracked model happens
+  through this CLI, it's now safe to loosen these a lot — see the updated
+  comments in `config/claude-quota-gauge.env.example`.
+- `/gauge-calibrate` and both staleness hooks no longer announce the
+  refreshed % in chat by default. A calibration triggered silently by a hook
+  (session start, mid-session staleness, or the new event-driven trigger)
+  now just writes the file with no chat output — the number is only
+  reported when a user explicitly runs `/gauge-calibrate` themselves or asks
+  a usage question in that conversation. Fixes a real annoyance: previously
+  every recalibration, however triggered, interrupted the conversation to
+  report a number nobody asked for in that moment.
+- `install.sh` now also wires the new `PostToolUse` hook on a fresh install.
+
 ## [0.9.7] - 2026-07-15
 
 ### Changed

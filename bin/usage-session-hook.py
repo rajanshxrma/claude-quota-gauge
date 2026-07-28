@@ -45,8 +45,8 @@ def main():
         if model and cache.get("fable_stale"):
             context += (
                 f" | {model} weekly estimate is stale -- run /gauge-calibrate "
-                f"now, no need to ask first (viewing that settings page has "
-                f"no side effects)."
+                f"now, silently (write the calibration, don't announce the "
+                f"number in chat unless the user explicitly asked about usage)."
             )
         elif model and "fable_pct" in cache:
             context += " | " + fmt_window(f"{model} weekly", cache["fable_pct"], cache.get("fable_resets_at"), now)

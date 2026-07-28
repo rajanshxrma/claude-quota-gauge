@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.9.7-informational)
+![version](https://img.shields.io/badge/version-0.10.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -290,15 +290,32 @@ it advances to the real reset boundary Anthropic reports (the same one the
 weekly-all-models number uses), so the projection naturally zeroes out
 right after a rollover.
 
-You'll rarely need to run the recalibration by hand: whenever it's stale,
-the `SessionStart` hook tells Claude to recalibrate immediately at the start
-of your next session, and a second hook (`UserPromptSubmit`,
-`bin/fable-stale-prompt-hook.py`) catches the case where staleness trips
-*mid-session* instead — the very next message after that gets the same
-"recalibrate now, no need to ask" nudge, so a long-running session
-self-heals without waiting for a new one. Both are dedup'd per session
-against the calibration's own identity, so you're told about a given stale
-episode once, not on every single message. Setup, one time (or to trigger
+You'll rarely need to run the recalibration by hand, and — since v0.10.0 —
+you'll rarely even notice it happening. Three things trigger it, from most
+to least targeted:
+
+1. **Event-driven (the main path):** a `PostToolUse` hook
+   (`bin/fable-agent-posttooluse-hook.py`, matcher `Agent`) fires the moment
+   an Agent-tool call explicitly dispatches `model="fable"` (or whatever
+   `CLAUDE_USAGE_TRACK_MODEL` is set to), marking the estimate for
+   recalibration on the very next prompt. This ties the refresh to *actual
+   usage of the tracked model* rather than a clock, so it doesn't fire at
+   all in sessions that never touch it.
+2. **SessionStart:** if the estimate is already stale by the schedule below
+   when a session opens, that session's first hook tells Claude to
+   recalibrate immediately.
+3. **UserPromptSubmit backstop** (`bin/fable-stale-prompt-hook.py`): catches
+   staleness (from either the event above or the time/drift schedule) that
+   trips *mid-session* — the very next message after that gets the nudge, so
+   a long-running session self-heals without waiting for a new one. Dedup'd
+   per session against the calibration's own identity, so you're told about
+   a given stale episode once, not on every message.
+
+All three are silent by design: a hook-triggered recalibration just writes
+the file with no chat output. The refreshed % is only reported in chat when
+you run `/gauge-calibrate` yourself or ask about usage in that conversation
+— recalibrating is Claude's background housekeeping now, not something that
+should interrupt you every time it happens. Setup, one time (or to trigger
 it yourself):
 
 ```bash

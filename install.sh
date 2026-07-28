@@ -61,10 +61,11 @@ if [[ "$REPLY" =~ ^[Yy] ]]; then
     "python3 $SCRIPTS_DIR/statusline.py" \
     "python3 $SCRIPTS_DIR/usage-session-hook.py" \
     "python3 $SCRIPTS_DIR/theme-watch-prompt-hook.py" \
-    "python3 $SCRIPTS_DIR/fable-stale-prompt-hook.py" <<'PYEOF'
+    "python3 $SCRIPTS_DIR/fable-stale-prompt-hook.py" \
+    "python3 $SCRIPTS_DIR/fable-agent-posttooluse-hook.py" <<'PYEOF'
 import json, os, sys
 
-settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command, fable_agent_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
 
 settings = {}
 if os.path.exists(settings_path):
@@ -138,13 +139,32 @@ else:
     print(f"  added UserPromptSubmit hook: {fable_prompt_hook_command}")
     print("  (no-ops unless the tracked-model weekly estimate is stale mid-session)")
 
+post_tool_use = hooks.setdefault("PostToolUse", [])
+
+fable_agent_already_present = any(
+    h.get("command") and normalize(h["command"]) == normalize(fable_agent_hook_command)
+    for group in post_tool_use
+    for h in group.get("hooks", [])
+)
+
+if fable_agent_already_present:
+    print("  fable-agent PostToolUse hook already present, left settings.json unchanged")
+else:
+    post_tool_use.append({
+        "matcher": "Agent",
+        "hooks": [{"type": "command", "command": fable_agent_hook_command + " 2>/dev/null || true", "timeout": 5, "async": True}],
+    })
+    print(f"  added PostToolUse hook (matcher: Agent): {fable_agent_hook_command}")
+    print("  (no-ops unless an Agent call explicitly dispatches model=\"fable\" -- ties")
+    print("  recalibration to actual tracked-model usage instead of a blind schedule)")
+
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)
 PYEOF
 else
   echo "  skipped. Add these to ~/.claude/settings.json yourself:"
   echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
-  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] } ] }'
+  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] } ], "PostToolUse": [ { "matcher": "Agent", "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-agent-posttooluse-hook.py", "timeout": 5, "async": true } ] } ] }'
 fi
 
 # --- Optional: pending tracking -------------------------------------------

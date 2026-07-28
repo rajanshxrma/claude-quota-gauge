@@ -288,6 +288,39 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
 
 FABLE_STALE_STATE_PATH = os.path.expanduser("~/.claude/scripts/fable-stale-state.json")
 LIVE_CACHE_PATH = os.path.expanduser("~/.claude/scripts/usage-live.json")
+FABLE_FORCE_RECAL_PATH = os.path.expanduser("~/.claude/scripts/fable-force-recal.json")
+
+
+def fable_mark_used(now, context="agent-dispatch"):
+    """Ties recalibration to actual Fable usage instead of the blind
+    time/drift schedule below: called by fable-agent-posttooluse-hook.py the
+    moment an Agent tool call explicitly dispatches model="fable", so the
+    very next prompt forces an immediate, silent gauge-calibrate regardless
+    of where the max-age/drift clock currently sits. That schedule still
+    exists as a backstop for Fable usage this CLI never sees (web/mobile),
+    just loosened -- see CLAUDE_USAGE_FABLE_MAX_CAL_AGE_HOURS /
+    CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD in the config file."""
+    os.makedirs(os.path.dirname(FABLE_FORCE_RECAL_PATH), exist_ok=True)
+    with open(FABLE_FORCE_RECAL_PATH, "w") as f:
+        json.dump({"marked_at": now.isoformat(), "context": context}, f)
+
+
+def fable_force_recal_pending():
+    if not os.path.exists(FABLE_FORCE_RECAL_PATH):
+        return False
+    try:
+        with open(FABLE_FORCE_RECAL_PATH) as f:
+            json.load(f)
+        return True
+    except Exception:
+        return False
+
+
+def fable_clear_force_recal():
+    try:
+        os.remove(FABLE_FORCE_RECAL_PATH)
+    except FileNotFoundError:
+        pass
 
 
 def _load_fable_stale_state():
