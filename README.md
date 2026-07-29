@@ -4,7 +4,7 @@ Your real Claude Max quota %, in your terminal, straight from Claude Code
 itself — no scraping, no stored credentials, no estimating for the two
 numbers Anthropic actually reports.
 
-![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, and a pending count, with the workload gauge line (compute / io / ram → verdict) rendering beneath it and a colored session-title chip right-aligned at its far edge, then the full `claude --resume <uuid>` on its own line below that](docs/demo.gif)
+![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, and a pending count, with a bold colored session-title chip right-aligned against it on the same line, and the workload gauge line (compute / io / ram → verdict) beneath it with the dimmed `↳ claude --resume <uuid>` right-aligned against that](docs/demo.gif)
 
 Since Claude Code v2.1.80, the statusline command is fed a `rate_limits`
 field on stdin — the exact 5-hour and weekly used-percentage Anthropic's own
@@ -15,13 +15,13 @@ your browser, touches an API key, or approximates anything — every number
 shown is the same one `claude.ai/settings/usage` would show you, because
 it's the same data, straight from Claude Code.
 
-The bar carries a second line too: a **workload gauge** that tells an
-I/O-bound session apart from a compute-bound one, so you know at a glance
-whether to stack jobs in parallel or run them one at a time. It reads the
-same signals Activity Monitor does — CPU, GPU, RAM/swap — with no `sudo`
-prompt, and it's kept fresh by a background sampler without ever slowing a
-render. See [Workload gauge](#workload-gauge-io-bound-vs-compute-bound) for
-how to read it.
+The bar carries more than that one line too: a **workload gauge** that
+tells an I/O-bound session apart from a compute-bound one, so you know at a
+glance whether to stack jobs in parallel or run them one at a time. It
+reads the same signals Activity Monitor does — CPU, GPU, RAM/swap — with no
+`sudo` prompt, and it's kept fresh by a background sampler without ever
+slowing a render. See [Workload gauge](#workload-gauge-io-bound-vs-compute-bound)
+for how to read it.
 
 If your account also has a separate weekly pool for one model (Fable, on
 Claude Max) that `rate_limits` doesn't break out, there's an optional
@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.11.0-informational)
+![version](https://img.shields.io/badge/version-0.13.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -119,11 +119,11 @@ configure to keep them straight.
 
 ## Session title chip
 
-The right-hand edge of the workload-gauge line carries a filled color chip
-naming what this session is currently about — e.g. `cobux-2-0-defect-fixes`
-or a plain-English title for a less-code-shaped session. Claude Code's own
-UI shows a chip like this, but only intermittently; this reproduces it on
-the one surface that renders every single time.
+Right-aligned against the quota line, a bold filled color chip names what
+this session is currently about — e.g. `cobux-2-0-defect-fixes` or a
+plain-English title for a less-code-shaped session. Claude Code's own UI
+shows a chip like this, but only intermittently; this reproduces it on the
+one surface that renders every single time.
 
 The title itself costs nothing extra to compute: Claude Code already
 generates one and re-generates it as a session's task shifts, writing every
@@ -145,22 +145,36 @@ visible when you look back.
 
 ## Resuming a session from the bar
 
-The third line carries this session's own full resume command, right-aligned
-at the far edge — e.g. `claude --resume 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`.
-If a long-running session gets close to a usage limit, copy that whole line
-and run it in a fresh terminal window to pick the session back up. It's the
+Right-aligned against the workload-gauge line, the session's full resume
+command, dimmed and prefixed with `↳` — e.g.
+`↳ claude --resume 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`. If a long-running
+session gets close to a usage limit, copy the command (skip the `↳`) and
+run it in a fresh terminal window to pick the session back up. It's the
 exact command, not just the bare UUID — `--resume` needs the whole ID, so a
 shortened prefix won't work, and this way there's nothing to reassemble by
-hand. It used to trail line 1 as a bare `session: <id>`, then moved to trail
-line 2 — both times crowding out something else on an already-dense line; it
-now gets its own row so the right-hand edge reads as one consistent column
-top to bottom.
+hand. The dim styling and `↳` mark it as a pointer/reference, distinct from
+the bold session-title chip on the line above.
+
+Both the chip and the resume command right-align via `right_align()` in
+`usage_common.py` — real content (the quota text, the gauge segment)
+already starts each of those lines, so the padding that pushes the chip/
+resume to the far edge sits in the *middle* of the string, never touching
+either end. That distinction turned out to matter a lot in testing: Claude
+Code's statusline renders through an internal component tree, not a raw
+terminal, and trims each line's own leading/trailing whitespace before
+display — a *solo* right-aligned line (nothing real before the padding)
+would have that padding stripped outright. Keeping the chip and resume
+command paired with real content on their own lines, rather than giving
+either one a line to itself, is what makes plain space-padding work
+reliably here — no cursor-positioning tricks, no anchor characters, no
+per-line trim edge cases to work around.
 
 ## Workload gauge (I/O-bound vs compute-bound)
 
-The second line of the bar answers one question: is this machine *waiting* or
-*calculating* right now? That's the line between work you can stack in
-parallel for free and work you have to run one job at a time.
+One line of the bar answers a different question from the rest of it: is
+this machine *waiting* or *calculating* right now? That's the line between
+work you can stack in parallel for free and work you have to run one job at
+a time.
 
 ![the workload gauge full-screen: compute/io/ram gauges, the serialize-vs-parallelize verdict, a CPU/GPU/RAM breakdown, and the top processes eating the machine](docs/workload-demo.gif)
 

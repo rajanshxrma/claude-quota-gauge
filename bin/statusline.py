@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Combined statusLine: the existing claude-quota-gauge line, a compact
-workload-gauge segment on a second line with the session-title chip
-right-aligned against it, and the session's full resume command on a third
-line, right-aligned below that.
+"""Combined statusLine, two lines: quota + session-title chip right-aligned
+against it, then the workload-gauge segment + resume command right-aligned
+against that.
 
 Claude Code allows only one statusLine command, so this wraps rather than
 replaces. It reads the Claude payload from stdin ONCE and forwards it verbatim
@@ -18,12 +17,20 @@ for where the title comes from (a tail-read of the transcript Claude Code
 already writes, no LLM call) and why the chip stays legible in both light and
 dark terminal themes.
 
-The full `claude --resume <uuid>` command (the exact text to resume this
-session in a fresh terminal if this one hits a usage limit) used to trail
-line 1 as a bare "session: <id>", then moved to trail line 2 -- both times
-crowding out something else on an already-dense line. It now gets its own
-third line, right-aligned with right_align_solo() so the right-hand edge
-still reads as one consistent column top to bottom.
+Down to two lines now (2026-07-29, per Rajan directly): resume moved off its
+own solo line onto the gauge line, via the same right_align() the chip
+already uses against the quota line. Two things drove this, both visible in
+screenshots he sent: the visual gap between chip and resume when they sat on
+separate lines, and a lone dim anchor dot appearing to float on its own row
+before Claude Code's own "bypass permissions" chrome line beneath the bar --
+Claude Code's statusline renderer (an Ink Box with a fixed `gap` prop between
+children, found in the CLI's own source) inserts real vertical space between
+every line this script emits, independent of what text is in those lines --
+so the only lever available here is emitting fewer lines. Two lines, each
+built from real content + `right_align()`, both needs no _SOLO_ANCHOR at all
+(that dot only existed to keep a *solo* line's padding from being stripped
+by Claude Code's per-line trim -- see usage_common.py -- and neither line
+here is solo anymore).
 
 If any piece errors, its line/segment is simply omitted rather than breaking
 the whole statusline.
@@ -41,7 +48,6 @@ WGAUGE = os.path.join(HERE, "workload-gauge.py")
 sys.path.insert(0, HERE)
 from usage_common import (  # noqa: E402
     right_align,
-    right_align_solo,
     session_title,
     title_chip,
     title_changed_recently,
@@ -66,12 +72,7 @@ except Exception:
 session_id = parsed.get("session_id")
 transcript_path = parsed.get("transcript_path")
 
-lines = []
 usage_line = run([sys.executable, USAGE], stdin_text=payload)
-if usage_line:
-    lines.append(usage_line)
-
-seg = run([sys.executable, WGAUGE, "--segment"])
 
 chip = ""
 try:
@@ -82,11 +83,13 @@ try:
 except Exception:
     chip = ""
 
-if seg or chip:
-    lines.append(right_align(seg, chip))
+lines = []
+if usage_line or chip:
+    lines.append(right_align(usage_line, chip))
 
-resume = f"claude --resume {session_id}" if session_id else ""
-if resume:
-    lines.append(right_align_solo(resume))
+seg = run([sys.executable, WGAUGE, "--segment"])
+resume = f"\033[2m↳ claude --resume {session_id}\033[0m" if session_id else ""
+if seg or resume:
+    lines.append(right_align(seg, resume))
 
 sys.stdout.write("\n".join(lines))

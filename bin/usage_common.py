@@ -754,23 +754,101 @@ def right_align(left, right):
     return f"{left} | {right}"
 
 
-def right_align_solo(text):
-    """Right-pads a single piece of text against the terminal width, for a
-    line with nothing on its left -- right_align() deliberately returns
-    `right` unpadded when `left` is empty (avoids a stray leading blank
-    line when composing multi-part lines), so a genuinely solo line (the
-    resume command's own row, see statusline.py) needs this instead."""
+def _tty_columns():
+    """Best-effort real terminal width straight from the controlling
+    terminal device, independent of whether Claude Code passes COLUMNS.
+    A subprocess normally inherits its parent's controlling terminal even
+    when its own stdout is redirected/piped (as it is here -- Claude Code
+    captures this script's stdout to parse it, so sys.stdout is never
+    itself a tty), which is exactly the gap COLUMNS-only alignment fell
+    into: found live (2026-07-29) that COLUMNS isn't reliably set on every
+    render. Returns None on any failure (no controlling terminal at all --
+    cron, a test harness, etc.), never raises."""
+    try:
+        fd = os.open(os.ctermid(), os.O_RDONLY)
+        try:
+            return os.get_terminal_size(fd).columns
+        finally:
+            os.close(fd)
+    except OSError:
+        return None
+
+
+# Root cause, confirmed against Claude Code's actual source (2026-07-29,
+# third round -- Fable traced this in the CLI binary, not inferred):
+# statusLine output is rendered through an Ink virtual-component tree, not
+# passed to a raw terminal. Two unconditional mechanisms sit between this
+# script's stdout and the display, neither configurable:
+#   (a) `s.stdout.trim().split('\n').flatMap(c => c.trim() || []).join('\n')`
+#       -- every line individually .trim()'d. Kills literal leading spaces
+#       outright (attempt 1 -- proven live: padding was really in the
+#       bytes, rendered flush left anyway).
+#   (b) the surviving text is fed through a real stateful ANSI parser
+#       (`Xho().feed()`) whose event loop only handles "text" and "link"
+#       (OSC-8) event types. A cursor-positioning sequence like `\033[171G`
+#       IS recognized as a legitimate control sequence -- and then silently
+#       dropped, since nothing consumes its event type. Kills cursor
+#       positioning outright (attempt 2 -- proven live: correct column
+#       values were computed and emitted, chip still rendered flush left).
+# SGR color/style codes (`\033[1m`, `\033[48;5;Nm`, ...) are the only
+# non-text things (b) preserves -- confirmed by the chip's background color
+# rendering correctly both attempts.
+#
+# The fix: (a) only strips from a string's own two ends, stopping at the
+# first non-whitespace byte -- so a line that starts with a real ESC
+# sequence is untouched from character 1 onward, and literal space
+# characters *after* that point survive completely intact. This is exactly
+# why the OLD shared-line design (gauge segment + padding + resume, one
+# string) always worked: real visible content occupied both ends, so the
+# padding in the middle was never near either edge .trim() touches. Solo
+# lines need the same shape manufactured deliberately: a short anchor
+# (itself starting with an ESC byte, so step (a) can't reach past it)
+# before the padding, not the padding first.
+_SOLO_ANCHOR = "\033[2m·\033[0m"  # dim middle dot -- small, doesn't compete
+                                   # visually with the chip/resume content
+                                   # it's marking the left edge of
+
+
+def right_align_solo(text, anchor_width=None):
+    """Right-pads a single piece of text for a line with nothing else on
+    it (the resume command's row, the title chip's row -- see
+    statusline.py) -- prefixed with `_SOLO_ANCHOR` so the padding survives
+    Claude Code's per-line trim (see the block comment above `_SOLO_ANCHOR`
+    for the full, source-verified reason this specific shape is required).
+
+    Width source, best available first: COLUMNS env var when Claude Code
+    sets it this render, else the controlling terminal's real width via
+    _tty_columns(), else `anchor_width` -- the widest line this script
+    already rendered this call (see statusline.py). COLUMNS/tty is what
+    actually reaches the true terminal edge and is confirmed live
+    (2026-07-29, third round) to produce correct right-alignment;
+    anchor_width alone (tried briefly as primary, round four, reverted)
+    only reaches as far as this script's own short lines and visibly lands
+    "in the middle" of a wide terminal instead of at the true right edge --
+    it stays only as a fallback for the rare render where COLUMNS/tty are
+    both unavailable.
+
+    RIGHT_ALIGN_MARGIN (the measured UI-border correction) applies only
+    when padding against a real terminal-width number -- irrelevant to the
+    anchor_width case, which pads against a line we drew ourselves."""
     if not text:
         return ""
+    glyph_w = visible_len(_SOLO_ANCHOR)
     try:
         columns = int(os.environ.get("COLUMNS", ""))
     except ValueError:
         columns = None
+    if not columns:
+        columns = _tty_columns()
     if columns:
-        pad = columns - RIGHT_ALIGN_MARGIN - visible_len(text)
+        pad = columns - RIGHT_ALIGN_MARGIN - visible_len(text) - glyph_w
         if pad >= 1:
-            return " " * pad + text
-    return text
+            return _SOLO_ANCHOR + " " * pad + text
+    if anchor_width:
+        pad = anchor_width - visible_len(text) - glyph_w
+        if pad >= 1:
+            return _SOLO_ANCHOR + " " * pad + text
+    return _SOLO_ANCHOR + " " + text
 
 
 # ---- session title chip ------------------------------------------------
@@ -948,7 +1026,18 @@ def title_changed_recently(session_id, title, now):
         return False
 
 
-_TITLE_TTY = sys.stdout.isatty() or os.environ.get("CLICOLOR_FORCE") == "1"
+# NOT gated on sys.stdout.isatty() -- found live (2026-07-29): Claude Code
+# always captures a statusLine command's stdout to parse it, so it is NEVER
+# a real tty from this script's point of view, in every render, always.
+# Gating color on that check (the mistake this comment replaces) meant the
+# chip was colorless in every single real render, not just some -- the
+# opposite of the intended "usually colored, plain only through a genuine
+# non-interactive pipe" behavior. workload-gauge.py's segment() already
+# solved this correctly (see its sc() helper and docstring: "ANSI is forced
+# on -- statuslines render it even though stdout isn't a TTY here") --
+# title_chip() below now follows the same rule: always emit ANSI, no TTY
+# check at all, since Claude Code's own renderer is what actually
+# interprets these codes, not this process's stdout.
 
 # Eight hand-picked xterm-256 background colors, spread across both hue and
 # lightness (not hue alone) so the set stays distinguishable under
@@ -972,13 +1061,16 @@ def _session_color(session_id):
 
 
 def title_chip(title, session_id, changed=False, columns=None):
-    """Builds the right-aligned session-title chip: a filled block (black
-    text on a stable per-session background) reproducing the chip Claude
-    Code's own UI shows intermittently above the statusline -- rendered
-    here on every render instead, since this bar is the one surface that
-    always draws. A solid background (not colored foreground text) is what
-    keeps it legible in both light and dark terminal themes without this
-    script needing to track which one is active.
+    """Builds the session-title chip: a filled block (bold black text on a
+    stable per-session background) reproducing the chip Claude Code's own
+    UI shows intermittently above the statusline -- rendered here on every
+    render instead, since this bar is the one surface that always draws.
+    On its own line now (no longer sharing a row with the workload-gauge
+    segment -- see statusline.py), so `max_len` no longer needs to leave
+    room for that segment; it now sizes to roughly the width of the line
+    it's the only thing on. A solid background (not colored foreground
+    text) is what keeps it legible in both light and dark terminal themes
+    without this script needing to track which one is active.
 
     `changed` prefixes a small marker (see title_changed_recently()) so a
     task-shift that happened off-screen is still visible when Rajan looks
@@ -989,14 +1081,12 @@ def title_chip(title, session_id, changed=False, columns=None):
         cols = columns if columns is not None else int(os.environ.get("COLUMNS", ""))
     except (ValueError, TypeError):
         cols = None
-    max_len = 44 if not cols else max(12, min(44, cols // 3))
+    max_len = 60 if not cols else max(16, min(70, cols - RIGHT_ALIGN_MARGIN))
     marker = "▸ " if changed else ""
     budget = max(1, max_len - len(marker))
     text = title
     if len(text) > budget:
         text = text[: max(1, budget - 1)].rstrip() + "…"
     body = f" {marker}{text} "
-    if not _TITLE_TTY:
-        return body.strip()
     bg = _session_color(session_id)
-    return f"\033[48;5;{bg}m\033[38;5;16m{body}\033[0m"
+    return f"\033[1m\033[48;5;{bg}m\033[38;5;16m{body}\033[0m"

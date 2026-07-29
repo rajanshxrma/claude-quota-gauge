@@ -4,6 +4,73 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-07-29
+
+### Changed
+- **Session title chip and resume command settled onto two lines, both
+  right-aligned via `right_align()`** — chip against the quota line, resume
+  against the workload-gauge line. 0.11.0/0.12.0 tried the chip and/or
+  resume on their own dedicated lines (three variations, same day, all live
+  in production against real feedback); each one either broke
+  right-alignment outright or left visible padding/gap that read as
+  unwanted empty space. The root fix that made *any* of this reliable: real
+  content has to start a line for space-padding after it to survive intact.
+
+### Fixed
+- **Root-caused why right-alignment on a line with nothing else on it kept
+  failing**, traced into Claude Code's actual CLI source (not inferred):
+  statusline output renders through an internal component tree, not a raw
+  terminal. Every line gets `.trim()`'d before display — literal leading
+  spaces on an otherwise-empty line never survive. Separately, a real
+  stateful ANSI parser recognizes cursor-positioning codes (`\033[nG`) as
+  legitimate control sequences and then silently drops them — only SGR
+  color/style codes and OSC-8 hyperlinks make it through. Two different
+  techniques for a *solo* right-aligned line (plain padding, then cursor
+  positioning) both failed for these two independent, confirmed reasons.
+  The fix that actually works: pair the chip/resume with real content already
+  starting their line (as above) — `right_align()` never needed any special
+  handling, since the padding it inserts always sits in the *middle* of a
+  string with real content on both ends, never near either edge `.trim()`
+  touches.
+- `right_align_solo()` and its `_SOLO_ANCHOR` dim-dot prefix remain in
+  `usage_common.py` as the documented fallback for a genuinely unavoidable
+  solo line (a short non-whitespace anchor before the padding survives the
+  trim same as real content would) — just unused by this composition now
+  that neither the chip nor the resume line needs it.
+
+## [0.12.0] - 2026-07-29
+
+### Fixed
+- **The resume line (and, as of this version, the title chip) could render
+  flat left-aligned instead of right-aligned.** `right_align_solo()` relied
+  entirely on Claude Code's `COLUMNS` env var, which turned out not to be
+  reliably present on every render (likely background/timer-triggered
+  renders vs. ones tied to a live keystroke) — found live. When missing, the
+  old fallback was bare unpadded text, which reads as flat left-aligned for
+  a line with nothing else on it to glue onto.
+
+### Changed
+- **`right_align_solo()` now self-anchors instead of depending solely on
+  `COLUMNS`.** Three tiers: the true terminal edge when `COLUMNS` is
+  actually available this render; failing that, self-anchor against the
+  widest line this script already rendered this call (`anchor_width`,
+  computed fresh from whatever lines succeeded — no terminal-width info
+  needed at all, so it can't go stale the way `COLUMNS` did); bare text only
+  as a last resort. `RIGHT_ALIGN_MARGIN` (the UI-border correction) applies
+  only to the `COLUMNS` tier.
+- **Session title chip moved to its own line**, right under the quota line —
+  no longer sharing a row with the workload-gauge segment. Reads closer to
+  how Claude Code's own native chip presents (prominent, right-aligned, on
+  top), and puts the workload-gauge line physically between the chip and
+  the resume command so "session topic" and "resume this session" are never
+  adjacent rows. `title_chip()`'s `max_len` grew accordingly (was capped to
+  leave room for the gauge segment sharing its line; that constraint is
+  gone) and the chip is now bold.
+- **Resume line is now dimmed and prefixed with `↳`** — `\033[2m↳ claude
+  --resume <uuid>\033[0m` — marking it visually as a pointer/reference
+  rather than a second title, for clearer separation from the chip above it.
+- Bar is now 4 lines: quota, title chip, workload gauge, resume command.
+
 ## [0.11.0] - 2026-07-29
 
 ### Added
