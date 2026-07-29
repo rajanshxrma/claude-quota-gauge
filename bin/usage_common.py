@@ -1,6 +1,6 @@
 """Shared helpers for the statusline renderer, the SessionStart hook, and the
 background watcher."""
-import json, os, re, subprocess, sys
+import hashlib, json, os, re, subprocess, sys
 from datetime import datetime, timedelta, timezone
 
 FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.json")
@@ -124,6 +124,16 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     must never present it as fact when stale. Returns None if it's never
     been calibrated at all.
 
+    Both tokens-since.py subprocess calls below carry an explicit timeout
+    (found live, 2026-07-29): tokens-since.py glob-scans every local
+    session transcript, and under real disk contention that scan can run
+    long enough to blow past the *caller's* subprocess timeout ten steps up
+    the chain (statusline.py's run(), timeout=10) -- which kills the whole
+    usage-statusline.py process, not just this fable segment, dropping the
+    entire quota line off the bar. A tight bound here (well under that
+    outer 10s) means a slow scan degrades to "stale" for this one segment
+    instead of taking the rest of the line down with it.
+
     Unlike the 5h/weekly-all numbers (which come free from rate_limits on
     every render), this needs the cap to have been derived at least once
     from a real, non-zero settings-page read. Once that's done, the %
@@ -199,7 +209,8 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
         try:
             tokens = json.loads(
                 subprocess.check_output(
-                    [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL
+                    [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL,
+                    timeout=5,
                 )
             )
             tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
@@ -226,7 +237,8 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     try:
         tokens = json.loads(
             subprocess.check_output(
-                [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL
+                [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL,
+                timeout=5,
             )
         )
     except Exception:
@@ -740,3 +752,251 @@ def right_align(left, right):
         if pad >= 1:
             return left + " " * pad + right
     return f"{left} | {right}"
+
+
+def right_align_solo(text):
+    """Right-pads a single piece of text against the terminal width, for a
+    line with nothing on its left -- right_align() deliberately returns
+    `right` unpadded when `left` is empty (avoids a stray leading blank
+    line when composing multi-part lines), so a genuinely solo line (the
+    resume command's own row, see statusline.py) needs this instead."""
+    if not text:
+        return ""
+    try:
+        columns = int(os.environ.get("COLUMNS", ""))
+    except ValueError:
+        columns = None
+    if columns:
+        pad = columns - RIGHT_ALIGN_MARGIN - visible_len(text)
+        if pad >= 1:
+            return " " * pad + text
+    return text
+
+
+# ---- session title chip ------------------------------------------------
+# Claude Code generates a short AI title for each session and re-generates
+# it as the task shifts (confirmed live: one session's title moved
+# "Resolve app installation and sign-in issues for COBUX" ->
+# "testflight-internal-external-switch" -> "cobux-2-0-defect-fixes" over
+# its lifetime). It persists every version into the session's own
+# transcript JSONL as {"type":"ai-title","aiTitle":"...","sessionId":"..."}
+# (or "custom-title"/"customTitle" when set by hand) -- so the current
+# title costs a file tail-read, not an LLM call. Claude Code's own UI
+# renders this as a chip just above the statusline but only intermittently;
+# reproducing it here, on the one surface that renders every single time,
+# is what makes it "always show."
+
+TITLE_STATE_PATH = os.path.expanduser("~/.claude/scripts/session-title-state.json")
+TITLE_CHANGE_MARKER_WINDOW = timedelta(minutes=5)
+_TITLE_TAIL_BYTES = 65536
+
+
+def _tail_json_records(path, tail_bytes=_TITLE_TAIL_BYTES):
+    """Yields parsed JSON objects from the last `tail_bytes` of a JSONL
+    file, oldest to newest. Transcripts run to thousands of lines and the
+    statusline re-renders roughly every 60s, so this never reads the whole
+    file -- it seeks near the end and discards whatever partial line the
+    seek landed inside of before parsing forward."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+    try:
+        with open(path, "rb") as f:
+            if size > tail_bytes:
+                f.seek(size - tail_bytes)
+                f.readline()  # discard the partial line the seek landed in
+            for raw in f:
+                try:
+                    yield json.loads(raw)
+                except Exception:
+                    continue
+    except Exception:
+        return
+
+
+def _first_prompt_text(path, max_chars=200):
+    """Head-scan (not tail) for the session's first real user message --
+    the fallback for a session too new to have any title record yet.
+    Mirrors Claude Code's own firstPrompt fallback (m7t() in the bundled
+    CLI): skip prompts that are themselves wrapped system content rather
+    than something the user actually typed."""
+    try:
+        with open(path, "r", errors="replace") as f:
+            for _ in range(200):  # a title/first prompt lands in the first
+                                   # few dozen lines of any real session;
+                                   # bail rather than scan forever
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if d.get("type") != "user":
+                    continue
+                content = (d.get("message") or {}).get("content")
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    text = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                else:
+                    text = ""
+                text = text.strip()
+                if text and not text.startswith("<"):
+                    return text[:max_chars]
+    except Exception:
+        pass
+    return None
+
+
+def session_title(transcript_path, session_id):
+    """Resolves the same title Claude Code's own UI would show, in the same
+    precedence order the CLI itself uses: a hand-set title > the
+    AI-generated one > the first user prompt > the bare session id (so a
+    brand-new, not-yet-titled session still shows something)."""
+    if not transcript_path or not os.path.exists(transcript_path):
+        return session_id[:8] if session_id else None
+
+    custom = None
+    ai = None
+    for rec in _tail_json_records(transcript_path):
+        t = rec.get("type")
+        if t == "custom-title" and rec.get("customTitle"):
+            custom = rec["customTitle"]
+        elif t == "ai-title" and rec.get("aiTitle"):
+            ai = rec["aiTitle"]
+
+    title = custom or ai
+    if not title:
+        title = _first_prompt_text(transcript_path)
+    if not title and session_id:
+        title = session_id[:8]
+    return title
+
+
+def _load_title_state():
+    if not os.path.exists(TITLE_STATE_PATH):
+        return {}
+    try:
+        with open(TITLE_STATE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_title_state(state, now):
+    # Prune well past the marker's own window so a long-lived machine
+    # doesn't accumulate one row per session forever -- same shape as
+    # _save_theme_state() above.
+    cutoff = now - TITLE_CHANGE_MARKER_WINDOW * 4
+    pruned = {}
+    for sid, entry in state.items():
+        try:
+            seen = datetime.fromisoformat(entry.get("changed_at", now.isoformat()))
+        except Exception:
+            continue
+        if seen > cutoff:
+            pruned[sid] = entry
+    try:
+        os.makedirs(os.path.dirname(TITLE_STATE_PATH), exist_ok=True)
+        with open(TITLE_STATE_PATH, "w") as f:
+            json.dump(pruned, f)
+    except Exception:
+        pass
+
+
+def title_changed_recently(session_id, title, now):
+    """Records this session's current title and reports whether it shifted
+    within TITLE_CHANGE_MARKER_WINDOW -- drives the chip's brief '▸' marker
+    (see title_chip()) so a task-shift that happened while Rajan was in
+    another window is still visible when he looks back. Any read/write
+    failure degrades to "no marker" rather than breaking the bar, matching
+    the theme-state helpers' error handling."""
+    if not session_id or not title:
+        return False
+    try:
+        state = _load_title_state()
+        entry = state.get(session_id)
+        if entry and entry.get("title") == title:
+            # Same title as last recorded -- only still worth marking if
+            # THAT establishment was itself a real change (not the
+            # session's first-ever sighting) and it's still inside the
+            # window. is_change is stored on the entry itself rather than
+            # re-derived here, because "was this a change" and "is this
+            # call recent" are different questions -- collapsing them made
+            # a second call with an unchanged title read (now - now) < 5min
+            # as true and wrongly re-trigger the marker on every repeat
+            # call for a title that was never a change to begin with.
+            if not entry.get("is_change"):
+                return False
+            changed_at = datetime.fromisoformat(entry["changed_at"])
+            return (now - changed_at) < TITLE_CHANGE_MARKER_WINDOW
+        # Title differs from what was last recorded, or this session hasn't
+        # been recorded yet. Anchor a fresh changed_at either way -- but
+        # only report an actual *change* worth marking when there was a
+        # prior title to change from; a session's very first sighting isn't
+        # a shift a human needs flagged.
+        is_change = entry is not None
+        state[session_id] = {"title": title, "changed_at": now.isoformat(), "is_change": is_change}
+        _save_title_state(state, now)
+        return is_change
+    except Exception:
+        return False
+
+
+_TITLE_TTY = sys.stdout.isatty() or os.environ.get("CLICOLOR_FORCE") == "1"
+
+# Eight hand-picked xterm-256 background colors, spread across both hue and
+# lightness (not hue alone) so the set stays distinguishable under
+# red-green color-vision deficiencies, and all bright enough that black
+# chip text reads clearly on every one. Deliberately skips pure red (196):
+# this bar already uses red for the swap warning (see workload-gauge.py),
+# and a session-identity color shouldn't borrow the "something's wrong"
+# association.
+_TITLE_PALETTE = [39, 208, 135, 44, 205, 220, 41, 203]
+
+
+def _session_color(session_id):
+    """Stable color per session_id, not per-render -- a hash keeps one
+    terminal window's chip the same color for the session's whole
+    lifetime (including after `claude --resume`), which is the actual
+    point: telling several concurrent sessions apart at a glance."""
+    if not session_id:
+        return _TITLE_PALETTE[0]
+    digest = hashlib.sha256(session_id.encode()).digest()
+    return _TITLE_PALETTE[digest[0] % len(_TITLE_PALETTE)]
+
+
+def title_chip(title, session_id, changed=False, columns=None):
+    """Builds the right-aligned session-title chip: a filled block (black
+    text on a stable per-session background) reproducing the chip Claude
+    Code's own UI shows intermittently above the statusline -- rendered
+    here on every render instead, since this bar is the one surface that
+    always draws. A solid background (not colored foreground text) is what
+    keeps it legible in both light and dark terminal themes without this
+    script needing to track which one is active.
+
+    `changed` prefixes a small marker (see title_changed_recently()) so a
+    task-shift that happened off-screen is still visible when Rajan looks
+    back, without a second color or an extra line."""
+    if not title:
+        return ""
+    try:
+        cols = columns if columns is not None else int(os.environ.get("COLUMNS", ""))
+    except (ValueError, TypeError):
+        cols = None
+    max_len = 44 if not cols else max(12, min(44, cols // 3))
+    marker = "▸ " if changed else ""
+    budget = max(1, max_len - len(marker))
+    text = title
+    if len(text) > budget:
+        text = text[: max(1, budget - 1)].rstrip() + "…"
+    body = f" {marker}{text} "
+    if not _TITLE_TTY:
+        return body.strip()
+    bg = _session_color(session_id)
+    return f"\033[48;5;{bg}m\033[38;5;16m{body}\033[0m"

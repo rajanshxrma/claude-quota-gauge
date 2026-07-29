@@ -4,6 +4,39 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-07-29
+
+### Added
+- **Session title chip.** A filled color block, right-aligned on the
+  workload-gauge line, naming what the session is currently about (e.g.
+  `cobux-2-0-defect-fixes`). Reproduces the chip Claude Code's own UI shows
+  intermittently above the statusline, rendered here on every render
+  instead. Costs nothing extra to compute: Claude Code already writes an
+  AI-generated title into the session transcript as its task shifts
+  (`{"type":"ai-title",...}`) — this tail-reads the last ~64KB of that file
+  for the newest one rather than making any LLM call. Precedence matches
+  the CLI's own: a hand-set custom title, then the AI title, then the first
+  user prompt, then the bare session ID. Background color is a stable hash
+  of the session ID (survives `--resume`), from an 8-color palette chosen
+  for contrast in both light and dark themes and for distinguishability
+  under red-green color-vision deficiency. When the title changes mid-session
+  the chip carries a `▸` marker for 5 minutes so a shift that happened
+  off-screen is still visible on return. New `session_title()`/`title_chip()`/
+  `title_changed_recently()` in `usage_common.py`; state tracked in
+  `session-title-state.json`.
+
+### Changed
+- Moved the session resume command off line 2 (the workload gauge line) to
+  its own line 3, right-aligned with a new `right_align_solo()` — freeing
+  line 2's right-hand slot for the title chip above.
+- `fable_estimate()`'s two `tokens-since.py` subprocess calls now carry an
+  explicit 5s timeout. Found live under real disk contention: an unbounded
+  scan there could run long enough to blow past the *caller's* 10s
+  subprocess timeout in `statusline.py`, which kills the whole
+  `usage-statusline.py` process — dropping the entire quota line, not just
+  the Fable segment. Bounding it here means a slow scan degrades to "stale"
+  for that one segment instead of taking the rest of the bar down with it.
+
 ## [0.10.0] - 2026-07-27
 
 ### Added

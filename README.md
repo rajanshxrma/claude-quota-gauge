@@ -4,7 +4,7 @@ Your real Claude Max quota %, in your terminal, straight from Claude Code
 itself — no scraping, no stored credentials, no estimating for the two
 numbers Anthropic actually reports.
 
-![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, and a pending count, with the workload gauge line (compute / io / ram → verdict) rendering beneath it — the full `claude --resume <uuid>` right-aligned at its far edge](docs/demo.gif)
+![the statusline in a terminal: model + effort, the real 5h / weekly / Fable %, and a pending count, with the workload gauge line (compute / io / ram → verdict) rendering beneath it and a colored session-title chip right-aligned at its far edge, then the full `claude --resume <uuid>` on its own line below that](docs/demo.gif)
 
 Since Claude Code v2.1.80, the statusline command is fed a `rate_limits`
 field on stdin — the exact 5-hour and weekly used-percentage Anthropic's own
@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.10.0-informational)
+![version](https://img.shields.io/badge/version-0.11.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -117,18 +117,44 @@ if you have several terminals/tabs open on different models or effort
 levels, each one's bar reflects only its own session — nothing to
 configure to keep them straight.
 
+## Session title chip
+
+The right-hand edge of the workload-gauge line carries a filled color chip
+naming what this session is currently about — e.g. `cobux-2-0-defect-fixes`
+or a plain-English title for a less-code-shaped session. Claude Code's own
+UI shows a chip like this, but only intermittently; this reproduces it on
+the one surface that renders every single time.
+
+The title itself costs nothing extra to compute: Claude Code already
+generates one and re-generates it as a session's task shifts, writing every
+version into that session's own transcript file. This tail-reads the last
+~64KB of that file for the newest one — no LLM call, no extra quota spent,
+just data Claude Code was already writing. A hand-set custom title wins if
+you've set one; a session too new to have any title yet falls back to its
+first prompt, then its bare session ID.
+
+The chip's background color is a stable hash of the session ID, so a given
+terminal window keeps the same color for its whole life (surviving
+`claude --resume`) — the point being able to tell several concurrent
+sessions apart at a glance without reading each one. It's a solid filled
+block rather than colored text specifically so it stays legible in both
+light and dark terminal themes without needing to know which one is active.
+When the title itself shifts mid-session, the chip carries a small `▸`
+marker for a few minutes so a change you weren't watching for is still
+visible when you look back.
+
 ## Resuming a session from the bar
 
-The second (workload gauge) line also trails with this session's own full
-resume command, right-aligned at the far edge — e.g.
-`claude --resume 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`. If a long-running
-session gets close to a usage limit, copy that whole line and run it in a
-fresh terminal window to pick the session back up. It's the exact command,
-not just the bare UUID — `--resume` needs the whole ID, so a shortened
-prefix won't work, and this way there's nothing to reassemble by hand.
-It used to trail line 1 as a bare `session: <id>`, but the full command reads
-much longer, and line 1 (model + three usage windows) was already the denser
-of the two — line 2 has the slack to spare.
+The third line carries this session's own full resume command, right-aligned
+at the far edge — e.g. `claude --resume 71bb780d-80a5-46c3-9cfa-bf3a0e0fa4bc`.
+If a long-running session gets close to a usage limit, copy that whole line
+and run it in a fresh terminal window to pick the session back up. It's the
+exact command, not just the bare UUID — `--resume` needs the whole ID, so a
+shortened prefix won't work, and this way there's nothing to reassemble by
+hand. It used to trail line 1 as a bare `session: <id>`, then moved to trail
+line 2 — both times crowding out something else on an already-dense line; it
+now gets its own row so the right-hand edge reads as one consistent column
+top to bottom.
 
 ## Workload gauge (I/O-bound vs compute-bound)
 
