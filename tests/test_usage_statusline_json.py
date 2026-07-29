@@ -42,14 +42,26 @@ def run_statusline(payload, args=None, home=None):
     a developer's actual ~/.claude/claude-quota-gauge.env can never leak
     into a test run (load_env_file() only sets vars that aren't already
     set, so an inherited real value would otherwise silently win).
+
+    HOME alone is not enough to isolate on Windows: os.path.expanduser("~")
+    consults USERPROFILE first there and ignores HOME entirely, so the
+    script under test resolved SCRIPTS to the developer's real
+    ~/.claude/scripts -- reading (and writing) live usage-live.json instead
+    of the throwaway tempdir. Pin both so ~ really lands in the isolated
+    home on every platform.
     """
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_USAGE")}
     env["HOME"] = home
+    env["USERPROFILE"] = home
+    # The rendered bar contains a U+2026 ellipsis ("refreshing…"). Without
+    # this the child encodes to the console codepage (cp1252) and the parent
+    # decodes as mojibake, breaking substring assertions on that text.
+    env["PYTHONUTF8"] = "1"
     env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
     cmd = [sys.executable, SCRIPT] + (args or [])
     return subprocess.run(
         cmd, input=json.dumps(payload), capture_output=True, text=True,
-        env=env, cwd=home, timeout=15,
+        encoding="utf-8", env=env, cwd=home, timeout=15,
     )
 
 
