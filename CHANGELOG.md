@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] - 2026-07-29
+
+### Changed
+- **Session-title chip palette swaps out teal (44, DarkTurquoise) for
+  goldenrod (172).** Claude Code's own native title chip renders in a
+  fixed teal — a session whose per-session color hash landed on 44 would
+  render as a near-literal visual duplicate of the native chip whenever
+  both happened to be on screen at once, not just matching text. No
+  runtime way to detect whether the native chip is actually visible at any
+  given moment (it's an internal Ink component with no exposed state), so
+  this is the only lever available: pick a palette with nothing close to
+  teal in it.
+
 ## [0.14.0] - 2026-07-29
 
 ### Added

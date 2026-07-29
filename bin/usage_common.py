@@ -1134,8 +1134,12 @@ def title_disambiguation(session_id, title):
 # chip text reads clearly on every one. Deliberately skips pure red (196):
 # this bar already uses red for the swap warning (see workload-gauge.py),
 # and a session-identity color shouldn't borrow the "something's wrong"
-# association.
-_TITLE_PALETTE = [39, 208, 135, 44, 205, 220, 41, 203]
+# association. Also skips teal/cyan (originally 44, DarkTurquoise): Claude
+# Code's own native title chip renders in a fixed teal, so a session whose
+# hash landed there would look like a literal duplicate of the native chip
+# rather than just coincidentally matching text -- swapped for 172
+# (a warm goldenrod), a hue bucket nothing else here is close to.
+_TITLE_PALETTE = [39, 208, 135, 172, 205, 220, 41, 203]
 
 
 def _session_color(session_id):
