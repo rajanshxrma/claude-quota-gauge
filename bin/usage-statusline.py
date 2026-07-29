@@ -29,6 +29,13 @@ trail this line, right-aligned -- but the full command reads much longer
 than the bare id it replaced, and cluttered this already-dense line. It's
 now appended instead to the second (workload-gauge) line by statusline.py,
 which has slack to spare -- see that wrapper's docstring.
+
+Pass --json (e.g. `echo '{...}' | usage-statusline.py --json`) to get the
+same data points as machine-readable JSON on stdout instead of the rendered
+bar text, so other scripts/tools can consume the live quota numbers without
+scraping the terminal string. Implemented as a `data` dict built alongside
+`parts` inside main(), one entry per bar segment -- see the comment where
+`data` is first assigned.
 """
 import sys, os, json
 from datetime import datetime, timezone
@@ -44,6 +51,7 @@ MIN_VERSION = "2.1.80"
 
 
 def main():
+    json_output = "--json" in sys.argv[1:]
     now = datetime.now(timezone.utc)
     try:
         payload = json.load(sys.stdin)
@@ -52,10 +60,16 @@ def main():
 
     rate_limits = payload.get("rate_limits") or {}
     parts = []
+    # Mirrors `parts` one data-point at a time, for --json. Every write here
+    # sits right next to the `parts.append()` it mirrors so the two can never
+    # drift apart silently -- see the module docstring for which parts of
+    # this are considered finished vs. still open (PAIRING_SESSION_NOTES.md).
+    data = {}
 
     model_part = fmt_model(payload)
     if model_part:
         parts.append(model_part)
+    data["model"] = model_part
 
     # Load whatever was last cached so a transient miss below never wipes
     # out the last-known-real numbers or the fable calibration state.
@@ -83,11 +97,15 @@ def main():
         # with zero explanation. `usage_added` tracks only the segments this
         # branch itself appends.
         usage_added = False
+        data["five_hour"] = None
+        data["seven_day"] = None
         if "five_hour_pct" in cache:
             parts.append(fmt_window("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"), now, cached=True))
+            data["five_hour"] = {"pct": cache["five_hour_pct"], "resets_at": cache.get("five_hour_resets_at"), "cached": True}
             usage_added = True
         if "seven_day_pct" in cache:
             parts.append(fmt_window("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"), now, cached=True))
+            data["seven_day"] = {"pct": cache["seven_day_pct"], "resets_at": cache.get("seven_day_resets_at"), "cached": True}
             usage_added = True
 
         if not usage_added:
@@ -98,12 +116,24 @@ def main():
             cli_version = payload.get("version")
             if cli_version and version_lt(cli_version, MIN_VERSION):
                 parts.append(f"usage: unavailable (Claude Code {cli_version} < {MIN_VERSION})")
+                data["unavailable"] = {
+                    "reason": "outdated_cli",
+                    "cli_version": cli_version,
+                    "min_version": MIN_VERSION,
+                }
             else:
                 parts.append("usage: unavailable")
+                data["unavailable"] = {
+                    "reason": "no_data",
+                    "cli_version": None,
+                    "min_version": None,
+                }
     else:
         cache["fetched_at"] = now.isoformat()
         five_hour = rate_limits.get("five_hour") or {}
         seven_day = rate_limits.get("seven_day") or {}
+        data["five_hour"] = None
+        data["seven_day"] = None
 
         if "used_percentage" in five_hour:
             pct = five_hour["used_percentage"]
@@ -111,6 +141,7 @@ def main():
             parts.append(fmt_window("5h", pct, resets_at, now))
             cache["five_hour_pct"] = pct
             cache["five_hour_resets_at"] = resets_at
+            data["five_hour"] = {"pct": pct, "resets_at": resets_at, "cached": False}
 
         if "used_percentage" in seven_day:
             pct = seven_day["used_percentage"]
@@ -118,11 +149,14 @@ def main():
             parts.append(fmt_window("week", pct, resets_at, now))
             cache["seven_day_pct"] = pct
             cache["seven_day_resets_at"] = resets_at
+            data["seven_day"] = {"pct": pct, "resets_at": resets_at, "cached": False}
 
     fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
     if fable:
         cache["fable_tracked_model"] = fable["tracked_model"]
         cache["fable_stale"] = fable["stale"]
+        elapsed = None
+        past_grace = None
         if fable["stale"]:
             # Staleness is Claude's problem first, not the user's: the
             # SessionStart and UserPromptSubmit hooks both tell Claude to
@@ -155,7 +189,8 @@ def main():
             # elapsed-time call to action instead of repeating a promise
             # that's already been broken once this episode.
             elapsed = fable_stale_elapsed(cache, now)
-            if elapsed > _cap_max_age():
+            past_grace = elapsed > _cap_max_age()
+            if past_grace:
                 hours = elapsed.total_seconds() / 3600
                 note = f"stale {hours:.0f}h — /gauge-calibrate"
                 if "fable_pct" in cache:
@@ -177,6 +212,29 @@ def main():
             cache.pop("fable_stale_since", None)
             cache.pop("fable_stale_identity", None)
 
+        # The bar text renders four distinct stale sub-states (never-
+        # calibrated is handled separately below via `fable` being falsy;
+        # stale-within-grace showing "refreshes next msg!"; stale-past-grace
+        # showing an elapsed-hours call to action; either of the latter two
+        # with no cached % to show at all). `stale_past_grace` +
+        # `stale_elapsed_hours` alongside `pct` fully reconstruct which of
+        # those the bar would have shown, without a script having to re-derive
+        # the grace-window math itself: not stale -> both null; stale and
+        # `stale_past_grace` false -> "refreshes next msg!" territory; stale
+        # and `stale_past_grace` true -> the elapsed-hours call to action.
+        # `pct` being null in either stale case is the "no cached % at all"
+        # sub-variant.
+        data["tracked_model"] = {
+            "name": fable["tracked_model"],
+            "stale": fable["stale"],
+            "pct": fable["pct"] if not fable["stale"] else cache.get("fable_pct"),
+            "resets_at": fable["resets_at"] if not fable["stale"] else cache.get("fable_resets_at"),
+            "stale_elapsed_hours": round(elapsed.total_seconds() / 3600, 2) if fable["stale"] else None,
+            "stale_past_grace": past_grace if fable["stale"] else None,
+        }
+    else:
+        data["tracked_model"] = None
+
     os.makedirs(SCRIPTS, exist_ok=True)
     with open(CACHE_PATH, "w") as f:
         json.dump(cache, f)
@@ -184,8 +242,13 @@ def main():
     tasks = pending_tasks_count()
     if tasks is not None:
         parts.append(f"pending: {tasks}")
+    data["pending_tasks"] = tasks
 
-    print(" | ".join(parts))
+    if json_output:
+        data["generated_at"] = now.isoformat()
+        print(json.dumps(data))
+    else:
+        print(" | ".join(parts))
 
 
 if __name__ == "__main__":
