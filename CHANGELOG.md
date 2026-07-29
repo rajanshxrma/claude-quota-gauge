@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-07-29
+
+### Added
+- **Optional session-title collision breaking.** Claude Code's own title
+  generator can give two unrelated sessions the identical title (most
+  commonly right after both ran the same slash command) — a real problem
+  Rajan hit directly with several concurrent `/afk` sessions all showing
+  "AFK pre-flight check", defeating the whole point of the chip. New
+  `bin/title-collision-prompt-hook.py` (`UserPromptSubmit`, wired by
+  `install.sh`) detects an exact title match against another
+  currently-open session (`colliding_sessions()` in `usage_common.py`,
+  using a new throttled `last_seen` field on the existing per-session title
+  state) and, on a genuine collision, asks the live turn to write one
+  factual sentence about that session's real work, then spend a single
+  `Agent` dispatch with `model="fable"` to compress it into a short label —
+  the only way to spend against the tracked Fable subscription pool rather
+  than pay-per-token API credits, so this can't be a standalone background
+  script. `bin/title-disambig-write.py` persists the result to
+  `title-disambig-cache.json` (2-hour freshness window); the chip prefers a
+  fresh cached label over the plain colliding title
+  (`title_disambiguation()`), falling straight back to the plain title on
+  any cache miss — a local file read either way, so this can't add latency
+  or block a render regardless of whether Fable ever responds.
+
 ## [0.13.0] - 2026-07-29
 
 ### Changed

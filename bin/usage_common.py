@@ -1009,6 +1009,23 @@ def title_changed_recently(session_id, title, now):
             # a second call with an unchanged title read (now - now) < 5min
             # as true and wrongly re-trigger the marker on every repeat
             # call for a title that was never a change to begin with.
+            #
+            # `last_seen` (added for colliding_sessions(), 2026-07-29) still
+            # needs to advance here even though the title itself didn't
+            # change -- otherwise a long-idle-but-open session with an
+            # unchanged title would look "not live" forever after its first
+            # render. Throttled to a write only every 60s+ (not every
+            # render) so an open, actively-rendering session doesn't turn
+            # this file into a write-on-every-keystroke log.
+            last_seen = entry.get("last_seen")
+            try:
+                stale = not last_seen or (now - datetime.fromisoformat(last_seen)) > timedelta(seconds=60)
+            except Exception:
+                stale = True
+            if stale:
+                entry["last_seen"] = now.isoformat()
+                state[session_id] = entry
+                _save_title_state(state, now)
             if not entry.get("is_change"):
                 return False
             changed_at = datetime.fromisoformat(entry["changed_at"])
@@ -1019,11 +1036,83 @@ def title_changed_recently(session_id, title, now):
         # prior title to change from; a session's very first sighting isn't
         # a shift a human needs flagged.
         is_change = entry is not None
-        state[session_id] = {"title": title, "changed_at": now.isoformat(), "is_change": is_change}
+        state[session_id] = {
+            "title": title, "changed_at": now.isoformat(), "is_change": is_change,
+            "last_seen": now.isoformat(),
+        }
         _save_title_state(state, now)
         return is_change
     except Exception:
         return False
+
+
+def colliding_sessions(session_id, title, now, live_window=None):
+    """Other currently-open sessions whose title exactly matches this one's
+    -- the real signal worth acting on (see title_disambiguation() below),
+    since a title being short/plain is fine as long as it's unique, and the
+    actual problem Rajan hit was several concurrent `/afk` sessions all
+    landing on the literal Claude-Code-generated title "AFK pre-flight
+    check". "Currently open" is judged by `last_seen` (see
+    title_changed_recently()) inside `live_window` -- without that, a
+    session closed hours ago whose last title happened to match would
+    trigger a collision nobody could see, since it's not actually
+    contending for the same visual space anymore."""
+    if not session_id or not title:
+        return []
+    if live_window is None:
+        live_window = TITLE_CHANGE_MARKER_WINDOW
+    try:
+        state = _load_title_state()
+    except Exception:
+        return []
+    out = []
+    for sid, entry in state.items():
+        if sid == session_id or entry.get("title") != title:
+            continue
+        try:
+            last_seen = datetime.fromisoformat(entry["last_seen"])
+        except Exception:
+            continue
+        if (now - last_seen) < live_window:
+            out.append(sid)
+    return sorted(out)
+
+
+TITLE_DISAMBIG_CACHE_PATH = os.path.expanduser("~/.claude/scripts/title-disambig-cache.json")
+TITLE_DISAMBIG_MAX_AGE = timedelta(hours=2)
+
+
+def title_disambiguation(session_id, title):
+    """Reads a Fable-generated disambiguation label for this session, if
+    one exists, is still fresh, and was generated against the SAME title
+    that's colliding right now (see title-collision-prompt-hook.py, which
+    writes this cache via title-disambig-write.py). Returns None on any
+    miss -- no cache entry, expired past TITLE_DISAMBIG_MAX_AGE, or
+    `source_title` mismatch (the raw ai-title moved on since generation,
+    so the cached label may no longer describe what's colliding now) --
+    which the caller (title_chip()'s caller in statusline.py) treats
+    identically to "never generate one": just show the plain title. This
+    read never blocks and never calls Fable itself -- generation only ever
+    happens from a live Claude Code turn (see the hook), which is the only
+    way to spend against the tracked Fable quota rather than pay-per-token
+    API credits."""
+    if not session_id or not title:
+        return None
+    try:
+        with open(TITLE_DISAMBIG_CACHE_PATH) as f:
+            cache = json.load(f)
+    except Exception:
+        return None
+    entry = cache.get(session_id)
+    if not entry or entry.get("source_title") != title:
+        return None
+    try:
+        generated_at = datetime.fromisoformat(entry["generated_at"])
+    except Exception:
+        return None
+    if datetime.now(timezone.utc) - generated_at > TITLE_DISAMBIG_MAX_AGE:
+        return None
+    return entry.get("summary") or None
 
 
 # NOT gated on sys.stdout.isatty() -- found live (2026-07-29): Claude Code

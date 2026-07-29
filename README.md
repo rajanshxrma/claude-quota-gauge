@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.13.0-informational)
+![version](https://img.shields.io/badge/version-0.14.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -142,6 +142,29 @@ light and dark terminal themes without needing to know which one is active.
 When the title itself shifts mid-session, the chip carries a small `▸`
 marker for a few minutes so a change you weren't watching for is still
 visible when you look back.
+
+### Optional: breaking title collisions between sessions
+
+Claude Code's own title generator can land two completely unrelated
+sessions on the identical title — most commonly when both recently ran the
+same slash command (e.g. several sessions all showing "AFK pre-flight
+check" right after each invoked `/afk`), which defeats the whole point of
+the chip: telling concurrent sessions apart at a glance.
+
+`bin/title-collision-prompt-hook.py` (a `UserPromptSubmit` hook, wired by
+`install.sh`) catches this: it checks whether the current session's title
+exactly matches another currently-open session's title (tracked in
+`session-title-state.json`, which every render already updates). On a
+genuine collision, it asks the live Claude Code turn to write one factual
+sentence about what that session is actually doing, then spend a single
+`Agent` dispatch with `model="fable"` to compress that into a short,
+distinctive label — the *only* way to spend against a tracked Fable
+subscription pool rather than pay-per-token API credits, so this can't run
+from a standalone background script. The label is cached
+(`title-disambig-cache.json`, 2-hour freshness window) and the chip prefers
+it over the plain colliding title whenever it's fresh; a cache miss falls
+straight back to the plain title, so nothing here can block a render or add
+latency — the render path is a local file read either way.
 
 ## Resuming a session from the bar
 

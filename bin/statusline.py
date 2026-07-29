@@ -17,6 +17,17 @@ for where the title comes from (a tail-read of the transcript Claude Code
 already writes, no LLM call) and why the chip stays legible in both light and
 dark terminal themes.
 
+When that title collides with another currently-open session's title (e.g.
+several `/afk` sessions all landing on Claude Code's own generic "AFK
+pre-flight check"), the chip prefers a cached Fable-generated disambiguation
+label instead, if one's fresh (title_disambiguation() -- see
+title-collision-prompt-hook.py, the UserPromptSubmit hook that actually
+triggers generation from a live turn, since spending against the tracked
+Fable quota requires an Agent dispatch, not something this render-path
+script can or should do itself). A cache miss (nothing generated yet, or
+stale) falls back to the plain title exactly as before -- this lookup is a
+local file read, so it can't add latency or block on Fable either way.
+
 Down to two lines now (2026-07-29, per Rajan directly): resume moved off its
 own solo line onto the gauge line, via the same right_align() the chip
 already uses against the quota line. Two things drove this, both visible in
@@ -51,6 +62,7 @@ from usage_common import (  # noqa: E402
     session_title,
     title_chip,
     title_changed_recently,
+    title_disambiguation,
 )
 
 payload = sys.stdin.read()  # read once; the quota line consumes it, everything else doesn't
@@ -79,7 +91,8 @@ try:
     title = session_title(transcript_path, session_id)
     if title:
         changed = title_changed_recently(session_id, title, datetime.now(timezone.utc))
-        chip = title_chip(title, session_id, changed=changed)
+        display_title = title_disambiguation(session_id, title) or title
+        chip = title_chip(display_title, session_id, changed=changed)
 except Exception:
     chip = ""
 
