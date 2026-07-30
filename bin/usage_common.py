@@ -731,10 +731,14 @@ def right_align(left, right):
     on the left. Claude Code sets the COLUMNS env var to the terminal's
     current width before running the statusLine command (v2.1.153+) -- this
     pads between `left` and `right` to fill it, short of the true edge by
-    RIGHT_ALIGN_MARGIN (see above). Falls back to a plain `left | right`
-    join (the pre-right-align behavior) when COLUMNS isn't set (older
-    Claude Code) or the terminal is too narrow for both to fit side by
-    side.
+    RIGHT_ALIGN_MARGIN (see above). When COLUMNS isn't set this render (found
+    live, 2026-07-29: it varies per session/render context -- e.g. a
+    background-monitored session's statusLine invocation may not get it the
+    same way an actively-focused terminal's does), falls back to
+    _tty_columns() -- a direct query of the controlling terminal device,
+    same fallback right_align_solo() already uses -- before finally
+    dropping to a plain `left | right` join if neither source panned out
+    (very old Claude Code, or truly no accessible terminal at all).
 
     Measures both sides with visible_len() rather than len() so this works
     whether `left` carries ANSI color codes (the workload segment) or not
@@ -747,6 +751,8 @@ def right_align(left, right):
         columns = int(os.environ.get("COLUMNS", ""))
     except ValueError:
         columns = None
+    if not columns:
+        columns = _tty_columns()
     if columns:
         pad = columns - RIGHT_ALIGN_MARGIN - visible_len(left) - visible_len(right)
         if pad >= 1:

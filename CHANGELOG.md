@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.2] - 2026-07-29
+
+### Fixed
+- **`right_align()` never got the `/dev/tty` fallback `right_align_solo()`
+  already had.** Found live: a different open session rendered with the
+  chip and resume falling back to a plain `left | right` join instead of
+  true right-alignment, while newer sessions in the same terminal app
+  looked correct — not a stale/old-session issue as it first appeared, but
+  `COLUMNS` genuinely varying by render context (a background-monitored
+  session's statusLine invocation doesn't necessarily get it passed the
+  same way an actively-focused terminal's does). `right_align()` only ever
+  checked the `COLUMNS` env var; `_tty_columns()` (added earlier the same
+  day for `right_align_solo()`) never made it back into this function when
+  the design settled on `right_align()` as primary. Now both share the same
+  three-tier fallback: `COLUMNS` env var, then a direct `/dev/tty` query,
+  then the plain `|` join as a last resort.
+
 ## [0.14.1] - 2026-07-29
 
 ### Changed
