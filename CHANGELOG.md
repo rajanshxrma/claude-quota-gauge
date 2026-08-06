@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-08-06
+
+### Added
+- **A once-a-day update check.** `install.sh` now wires in
+  `update-check-session-hook.py`, a SessionStart hook that compares your
+  installed version against the repo's `VERSION` file and, by default,
+  announces when a newer one is available (current version, available
+  version, exact update command) -- never touching a file on disk unless
+  you opt in with `CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1`, in which case it
+  re-downloads every `bin/*.py` and `commands/*.md` and applies the update
+  automatically, still always announcing what it did. Built after finding,
+  live, that a real bug fix (below) had already been sitting shipped
+  locally on one install with no way for any other install to learn about
+  it short of a manual re-clone. Fixed repo/branch, not configurable via
+  env var, so a stray misconfiguration can never repoint it at an
+  untrusted source. Fails silent on any network error -- an update check
+  must never be the reason a session start hangs.
+
+### Fixed
+- **The Fable weekly-estimate calibration overwrote its derived cap
+  outright on every calibration, instead of treating it as a noisy sample
+  of a fixed underlying constant.** Found live (2026-08-06): recalibrating
+  right after a Fable-model subagent dispatch counts the fresh local
+  tokens before claude.ai's server-side % has caught up to reflect that
+  same dispatch, so the raw sample systematically overshoots -- a 150->239
+  cap swing (59%) was observed inside 17 minutes with three concurrent
+  local sessions running Fable-backed skills, which showed up as the
+  displayed % swinging from ~80% down to 56% with no real usage change.
+  Now blends each new calibration with the prior same-window cap (70%
+  prior / 30% new) instead of overwriting -- still converges to a genuinely
+  changed cap (e.g. a plan upgrade) over a few calibrations, just can't be
+  yanked there by one noisy sample.
+- **Carried forward a zero-tracked-tokens guard from 2026-07-30 that had
+  been fixed locally but never made it into this repo** (the same
+  drift-gap `update-check-session-hook.py` above exists to close): a
+  nonzero real % with zero locally-tracked tokens this window (real usage
+  ran entirely off-CLI) no longer silently derives a degenerate `cap` of
+  0.0.
+
 ## [0.14.2] - 2026-07-29
 
 ### Fixed

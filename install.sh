@@ -40,6 +40,14 @@ cp "$SCRIPT_DIR"/commands/gauge-calibrate.md "$COMMANDS_DIR/"
 echo "  copied scripts to $SCRIPTS_DIR"
 echo "  copied /pending and /gauge-calibrate to $COMMANDS_DIR"
 
+# Records the installed version so update-check-session-hook.py has something
+# to compare the latest upstream VERSION against. Re-running install.sh after
+# a `git pull` (the manual update path) naturally refreshes this too.
+if [[ -f "$SCRIPT_DIR/VERSION" ]]; then
+  cp "$SCRIPT_DIR/VERSION" "$CLAUDE_DIR/claude-quota-gauge-version"
+  echo "  recorded installed version ($(cat "$SCRIPT_DIR/VERSION")) for the update checker"
+fi
+
 # Scaffold the config file so every optional variable is discoverable in one
 # place -- every value stays commented out (i.e. still defaulted) until you
 # choose to change it. Never overwrites an existing config.
@@ -63,10 +71,11 @@ if [[ "$REPLY" =~ ^[Yy] ]]; then
     "python3 $SCRIPTS_DIR/theme-watch-prompt-hook.py" \
     "python3 $SCRIPTS_DIR/fable-stale-prompt-hook.py" \
     "python3 $SCRIPTS_DIR/fable-agent-posttooluse-hook.py" \
-    "python3 $SCRIPTS_DIR/title-collision-prompt-hook.py" <<'PYEOF'
+    "python3 $SCRIPTS_DIR/title-collision-prompt-hook.py" \
+    "python3 $SCRIPTS_DIR/update-check-session-hook.py" <<'PYEOF'
 import json, os, sys
 
-settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command, fable_agent_hook_command, title_collision_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
+settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command, fable_agent_hook_command, title_collision_hook_command, update_check_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
 
 settings = {}
 if os.path.exists(settings_path):
@@ -111,6 +120,20 @@ if already_present:
 else:
     session_start.append({"hooks": [{"type": "command", "command": hook_command, "timeout": 15}]})
     print(f"  added SessionStart hook: {hook_command}")
+
+update_check_already_present = any(
+    h.get("command") and normalize(h["command"]) == normalize(update_check_hook_command)
+    for group in session_start
+    for h in group.get("hooks", [])
+)
+
+if update_check_already_present:
+    print("  update-check SessionStart hook already present, left settings.json unchanged")
+else:
+    session_start.append({"hooks": [{"type": "command", "command": update_check_hook_command, "timeout": 8}]})
+    print(f"  added SessionStart hook: {update_check_hook_command}")
+    print("  (checks at most once/24h for a newer claude-quota-gauge; notifies by")
+    print("  default, only auto-applies if CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1 is set)")
 
 user_prompt_submit = hooks.setdefault("UserPromptSubmit", [])
 
@@ -178,7 +201,7 @@ PYEOF
 else
   echo "  skipped. Add these to ~/.claude/settings.json yourself:"
   echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
-  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] }, { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/title-collision-prompt-hook.py", "timeout": 10 } ] } ], "PostToolUse": [ { "matcher": "Agent", "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-agent-posttooluse-hook.py", "timeout": 5, "async": true } ] } ] }'
+  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/update-check-session-hook.py", "timeout": 8 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] }, { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/title-collision-prompt-hook.py", "timeout": 10 } ] } ], "PostToolUse": [ { "matcher": "Agent", "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-agent-posttooluse-hook.py", "timeout": 5, "async": true } ] } ] }'
 fi
 
 # --- Optional: pending tracking -------------------------------------------
@@ -249,6 +272,10 @@ echo "      run /gauge-calibrate once to turn it on"
 echo "    - the 'pending: N' count -- set up above, or any time later"
 echo "    - a background launchd watcher for threshold notifications, and"
 echo "      macOS UI-theme-drift detection (CLAUDE_USAGE_THEME_WATCH=1)"
+echo ""
+echo "  Also on by default: a once-a-day check for a newer claude-quota-gauge,"
+echo "  surfaced as a one-line heads-up (never auto-applied unless you set"
+echo "  CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1). See README for exactly what it does."
 echo ""
 echo "  All optional config lives in one place: $ENV_PATH"
 echo "  Full details on every feature: README.md"

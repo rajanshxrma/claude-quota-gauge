@@ -101,23 +101,55 @@ def main():
         "local_total_at_cal": sum(tokens.values()),
     }
 
-    if pct > 0:
-        # A real non-zero read gives an actual denominator -- derive
-        # (or refresh, if re-verifying) the weekly cap from it.
-        cal["cap"] = tracked_tokens / (pct / 100)
+    prior_cap, prior_cap_derived_at, prior_window_start = None, None, None
+    if os.path.exists(CAL_PATH):
+        try:
+            with open(CAL_PATH) as f:
+                prior = json.load(f)
+            prior_cap = prior.get("cap")
+            prior_cap_derived_at = prior.get("cap_derived_at")
+            prior_window_start = prior.get("window_start")
+        except Exception:
+            pass
+
+    if pct > 0 and tracked_tokens > 0:
+        # A real non-zero read *and* a nonzero local denominator -- derive a
+        # fresh raw cap from this sample. The true weekly cap is a fixed
+        # constant (the plan's real budget); each calibration is just a
+        # noisy independent estimate of it, so blend with the prior
+        # same-window cap (EMA, 70% prior / 30% new) instead of overwriting
+        # outright -- a single noisy sample otherwise swings the live %
+        # wildly. Found live (2026-08-06): recalibrating immediately after a
+        # Fable subagent dispatch (see fable-agent-posttooluse-hook.py)
+        # counts the fresh local tokens before claude.ai's server-side %
+        # has caught up to reflect that same dispatch, so the raw sample
+        # systematically overshoots right after a dispatch -- a 150->239
+        # cap swing (59%) inside 17 minutes was observed with three
+        # concurrent local sessions running Fable-backed skills. Smoothing
+        # doesn't fix the lag itself, but stops one overshoot from being
+        # trusted outright; it converges back over a few calibrations if
+        # the true cap really did change (e.g. a plan upgrade), and resets
+        # to trusting the raw sample once the window rolls over (a new
+        # week has nothing prior to blend against).
+        raw_cap = tracked_tokens / (pct / 100)
+        if prior_cap and prior_window_start == window_start.isoformat():
+            cal["cap"] = 0.7 * prior_cap + 0.3 * raw_cap
+        else:
+            cal["cap"] = raw_cap
         cal["cap_derived_at"] = now.isoformat()
     else:
-        # Can't derive a cap from a 0% read -- carry forward whatever cap
-        # is already on file (if any) instead of discarding it.
-        prior_cap, prior_cap_derived_at = None, None
-        if os.path.exists(CAL_PATH):
-            try:
-                with open(CAL_PATH) as f:
-                    prior = json.load(f)
-                prior_cap = prior.get("cap")
-                prior_cap_derived_at = prior.get("cap_derived_at")
-            except Exception:
-                pass
+        # Can't derive a trustworthy cap here -- either a 0% read (no
+        # numerator), or a nonzero real % with zero locally-tracked tokens
+        # this window (found live, 2026-07-30: happens whenever this week's
+        # real Fable usage ran entirely off-CLI -- web/mobile, or background
+        # routines before local tracking picked anything up). Dividing by a
+        # zero tracked_tokens in that second case would silently produce a
+        # cap of exactly 0.0, which fable_estimate() then either treats as
+        # "never calibrated" (0.0 is falsy) or, if tracked_tokens ticks up
+        # to even 1 unit right after, projects straight through 85%/95%
+        # toward the 120% ceiling off a single trivial local ping -- the
+        # false "hit 95%" alert this was chasing. Carry forward whatever cap
+        # is already on file (if any) instead of writing a degenerate one.
         cal["cap"] = prior_cap
         cal["cap_derived_at"] = prior_cap_derived_at
 

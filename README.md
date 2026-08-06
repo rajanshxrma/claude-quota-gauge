@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.14.2-informational)
+![version](https://img.shields.io/badge/version-0.15.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -64,6 +64,32 @@ first renders, usually within a few seconds. If your account also has its
 own weekly pool for one model (e.g. Fable), see
 [Optional: per-model weekly tracking](#optional-per-model-weekly-tracking-eg-fable)
 for a one-time opt-in step to track that too.
+
+---
+
+## Keeping it updated
+
+`install.sh` also wires in a SessionStart hook that checks, at most once
+every 24 hours, whether a newer claude-quota-gauge is available. Two tiers:
+
+- **Default: announce only.** A one-line heads-up — your version, the
+  available version, and the exact update command
+  (`git pull && ./install.sh` from your clone) — with nothing touched on
+  disk. This is what every install gets for free, no config needed.
+- **Opt-in: auto-apply.** Set `CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1` in
+  `~/.claude/claude-quota-gauge.env` and it re-downloads every `bin/*.py`
+  and `commands/*.md` straight from this repo and applies them, still
+  always telling you what changed — auto-applying is never silent, even
+  when opted in. Off by default deliberately: this tool runs as hooks with
+  real permissions on every prompt, so having it rewrite its own files in
+  the background is a real trust decision, not something to default on
+  for you.
+
+It pulls from a fixed repo/branch that isn't configurable via env var —
+by design, so a stray misconfiguration can never repoint it at an
+untrusted source. Every network call has a short timeout and fails silent
+on any error; an update check should never be why a session start hangs
+or a hook errors out because your network is offline or flaky.
 
 ---
 
