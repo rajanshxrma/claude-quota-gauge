@@ -156,7 +156,7 @@ class SessionHookTest(IsolatedHomeTestCase):
     def test_hook_carries_directive_with_auto_flag(self):
         self._seed_cache()
         ctx = self._hook_context(extra_env={"CLAUDE_USAGE_UC_AUTO": "1"})
-        self.assertIn("Standing auto-mode is ON", ctx)
+        self.assertIn("Standing auto-mode is also ON", ctx)
         self.assertIn("ultracode-mark.py", ctx)
 
     def test_hook_budget_gates_auto_mode(self):

@@ -618,15 +618,22 @@ def ultracode_context(state, readiness, now):
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
-        line = "ultracode budget: ok (one typical multi-agent Workflow run fits in every pool's remaining quota)"
+        line = (
+            "ultracode budget: ok (one typical multi-agent Workflow run fits "
+            "in every pool's remaining quota). Whenever this session launches "
+            "a Workflow run for ANY reason (ultracode keyword, session "
+            f"toggle, or explicit ask), run `{mark} on --reason '<short "
+            f"task>'` first and `{mark} off` when it finishes -- that's what "
+            "makes the statusline gauge show the run as active; the harness "
+            "never flips it for you."
+        )
         if auto:
             line += (
-                ". Standing auto-mode is ON (user-granted, in this machine's "
-                "claude-quota-gauge config): when a task this session clearly "
+                " Standing auto-mode is also ON (user-granted, in this "
+                "machine's claude-quota-gauge config): when a task clearly "
                 "warrants multi-agent orchestration, use the Workflow tool on "
-                f"your own judgment -- run `{mark} on --reason '<short task>'` "
-                f"first and `{mark} off` when the run finishes, so the "
-                "statusline gauge displays the active state."
+                "your own judgment without waiting for the keyword -- same "
+                "marking discipline."
             )
         return line
     who = "+".join(readiness["blockers"])
