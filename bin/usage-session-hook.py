@@ -12,7 +12,9 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import fmt_window  # noqa: E402
+from usage_common import fmt_window, load_env_file, ultracode_context, ultracode_readiness, ultracode_state  # noqa: E402
+
+load_env_file()
 
 SCRIPTS = os.path.expanduser("~/.claude/scripts")
 CACHE_PATH = os.path.join(SCRIPTS, "usage-live.json")
@@ -50,6 +52,15 @@ def main():
             )
         elif model and "fable_pct" in cache:
             context += " | " + fmt_window(f"{model} weekly", cache["fable_pct"], cache.get("fable_resets_at"), now)
+
+        # Ultracode awareness: active-run marker + affordability verdict,
+        # and (only when the machine's owner set CLAUDE_USAGE_UC_AUTO=1 in
+        # their claude-quota-gauge.env) the standing directive that lets a
+        # session start a Workflow run on its own judgment. See
+        # ultracode_context() in usage_common.py for the exact wording.
+        uc_line = ultracode_context(ultracode_state(now), ultracode_readiness(now, cache), now)
+        if uc_line:
+            context += " | " + uc_line
 
     print(json.dumps({
         "hookSpecificOutput": {

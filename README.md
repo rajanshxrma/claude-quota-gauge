@@ -34,7 +34,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.15.0-informational)
+![version](https://img.shields.io/badge/version-0.16.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -291,6 +291,51 @@ python3 ~/.claude/scripts/workload-gauge.py          # one reading
 python3 ~/.claude/scripts/workload-gauge.py --watch   # live, refreshes each second
 ```
 
+## Ultracode gauge (multi-agent Workflow runs)
+
+Claude Code sessions can orchestrate multi-agent Workflow runs ("ultracode")
+that burn quota far faster than a normal turn. The bar carries a `uc:`
+segment that answers the two questions that matter about them at a glance:
+
+- **`uc: ON 12m`** — a run is live right now, and for how long. The marker
+  is flipped by `bin/ultracode-mark.py on --reason "<task>"` / `off`, which
+  a session (or you) runs around a Workflow launch. It carries a TTL
+  (default 4h, `CLAUDE_USAGE_UC_TTL_HOURS`) judged read-side, so a session
+  that dies mid-run can never leave the bar claiming a live run forever.
+- **`uc: ok`** / **`uc: wait 2h 59m (week)`** — no run live; instead,
+  whether one *typical* run currently fits in every pool's remaining quota,
+  and if not, which pool blocks and when that clears. Judged against rough,
+  env-tunable per-pool cost estimates (see [Configuration](#configuration)) —
+  deliberately coarse, meant to separate "plenty of room" from "about to
+  cap", not to model your exact workflow. Tune the knobs against your own
+  observed burns.
+
+With the combined two-line statusline (`statusline.py`), the indicator
+renders at the end of the **workload line**, next to the swap marker — an
+active run gets the same magenta→purple gradient text Claude Code's own UI
+paints the `ultracode` keyword with, phase-shifted each render so it
+shimmers over time, while the idle verdicts stay dim. Standalone
+`usage-statusline.py` installs get a plain `uc:` segment on the quota line
+instead (the wrapper suppresses that one via `--no-uc-segment` so it never
+shows twice).
+
+The `SessionStart` hook injects the same verdict into each new session's
+context, so the session itself knows whether a run is affordable before it
+considers starting one, and `--json` carries it all under an `ultracode`
+key for other tooling.
+
+### Optional: auto-mode (letting sessions start runs themselves)
+
+Off by default. Setting `CLAUDE_USAGE_UC_AUTO=1` adds one more sentence to
+the injected context: a standing, owner-granted authorization for a session
+to start a Workflow run on its own judgment — no `ultracode` keyword typed —
+but only while the budget verdict is ok, and always flipping the gauge's
+marker so the bar shows the run the whole time it's live. Setting the flag
+*is* the consent, which is exactly why it lives in your own config file and
+nothing here ever turns it on for you. When the budget is tight, the same
+injection explicitly tells the session **not** to self-start a run (your
+own explicit request still overrides).
+
 ## Configuration
 
 `install.sh` copies `config/claude-quota-gauge.env.example` to
@@ -308,6 +353,12 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_FABLE_DRIFT_THRESHOLD` | `2` | Points of *unexplained* weekly-all-models movement (beyond what local usage accounts for) before the estimate reports stale immediately — see below |
 | `CLAUDE_USAGE_ALERT_THRESHOLD` | `85` | % that triggers a desktop notification |
 | `CLAUDE_USAGE_THEME_WATCH` | unset (off) | macOS-only: flags UI theme staleness in the background — see below |
+| `CLAUDE_USAGE_UC_COST_5H` | `20` | Points of the 5h pool one typical multi-agent Workflow run is assumed to burn — see the ultracode gauge above |
+| `CLAUDE_USAGE_UC_COST_WEEK` | `6` | Same, for the weekly pool |
+| `CLAUDE_USAGE_UC_COST_TRACKED` | `8` | Same, for the tracked model's weekly pool (only if per-model tracking is on) |
+| `CLAUDE_USAGE_UC_BUFFER` | `3` | Reserve points kept free on every pool on top of the assumed cost |
+| `CLAUDE_USAGE_UC_TTL_HOURS` | `4` | Hours before an ultracode active-marker expires on its own |
+| `CLAUDE_USAGE_UC_AUTO` | unset (off) | Standing consent for sessions to self-start Workflow runs — see the ultracode gauge above |
 
 ## The PENDING.md convention
 

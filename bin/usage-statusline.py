@@ -41,7 +41,7 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model, fable_stale_elapsed, _cap_max_age  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model, fable_stale_elapsed, _cap_max_age, fmt_ultracode, ultracode_readiness, ultracode_state  # noqa: E402
 
 load_env_file()
 
@@ -234,6 +234,24 @@ def main():
         }
     else:
         data["tracked_model"] = None
+
+    # After the fable block so the readiness check sees this render's
+    # freshest numbers for all three pools, not last render's.
+    uc_state = ultracode_state(now)
+    uc_ready = ultracode_readiness(now, cache)
+    # The wrapper (statusline.py) passes --no-uc-segment and renders the
+    # indicator on the workload line instead (styled, next to the swap
+    # marker); the plain segment here is for standalone installs of this
+    # script only. --json carries the data either way.
+    if "--no-uc-segment" not in sys.argv[1:]:
+        uc_part = fmt_ultracode(uc_state, uc_ready, now)
+        if uc_part:
+            parts.append(uc_part)
+    data["ultracode"] = {
+        "active": bool(uc_state),
+        "since": uc_state["since"].isoformat() if uc_state else None,
+        "readiness": uc_ready,
+    }
 
     os.makedirs(SCRIPTS, exist_ok=True)
     with open(CACHE_PATH, "w") as f:

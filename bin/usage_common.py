@@ -454,6 +454,190 @@ def fable_stale_elapsed(cache, now):
     return now - since
 
 
+UC_STATE_PATH = os.path.expanduser("~/.claude/scripts/ultracode-state.json")
+
+
+def _uc_cost(name, default):
+    # Lazy env reads, same rationale as the fable knobs above: consumers
+    # import this module before load_env_file() runs, so module-level reads
+    # would bake in defaults and leave the documented knobs dead.
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def ultracode_state(now):
+    """Reads the shared active-run marker (written by ultracode-mark.py when
+    a session starts or finishes an orchestrated Workflow run). Returns None
+    when idle. An active entry older than its TTL counts as expired, not
+    active -- a crashed or killed session must never leave the gauge claiming
+    a run is live forever. Expiry is judged read-side (nothing is repaired on
+    disk) so every statusline render stays write-free."""
+    if not os.path.exists(UC_STATE_PATH):
+        return None
+    try:
+        with open(UC_STATE_PATH) as f:
+            state = json.load(f)
+        if not state.get("active"):
+            return None
+        since = datetime.fromisoformat(state["since"])
+    except Exception:
+        return None
+    ttl = timedelta(hours=_uc_cost("CLAUDE_USAGE_UC_TTL_HOURS", 4))
+    elapsed = now - since
+    if elapsed > ttl or elapsed < timedelta(0):
+        return None
+    return {
+        "since": since,
+        "elapsed": elapsed,
+        "reason": state.get("reason") or "",
+        "session_id": state.get("session_id") or "",
+    }
+
+
+def ultracode_readiness(now, cache):
+    """Verdict on whether one typical ultracode (multi-agent Workflow) run
+    fits in the quota that's left. Judged per pool against a rough,
+    env-tunable estimate of what a medium run burns, in percentage points of
+    that pool, plus a reserve buffer so a run never lands exactly on 100%:
+
+      CLAUDE_USAGE_UC_COST_5H       default 20   (5h block points)
+      CLAUDE_USAGE_UC_COST_WEEK     default 6    (weekly points)
+      CLAUDE_USAGE_UC_COST_TRACKED  default 8    (tracked-model weekly points)
+      CLAUDE_USAGE_UC_BUFFER        default 3    (reserve on every pool)
+
+    The defaults are deliberately rough -- they exist to catch the obvious
+    cases (plenty of room vs. clearly about to cap), not to model a specific
+    workflow. Tune them against your own observed burns.
+
+    Returns None when no pool data is cached at all, else
+    {"verdict": "ok"|"wait", "blockers": [labels], "until": epoch|None}
+    where `until` is the latest reset among blocked pools (when every
+    blocked pool reports one) -- i.e. when the answer flips back to ok."""
+    buffer = _uc_cost("CLAUDE_USAGE_UC_BUFFER", 3)
+    pools = []
+    if "five_hour_pct" in cache:
+        pools.append(("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"),
+                      _uc_cost("CLAUDE_USAGE_UC_COST_5H", 20)))
+    if "seven_day_pct" in cache:
+        pools.append(("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"),
+                      _uc_cost("CLAUDE_USAGE_UC_COST_WEEK", 6)))
+    tracked = cache.get("fable_tracked_model")
+    if tracked and "fable_pct" in cache:
+        # A slightly-stale tracked % beats ignoring the pool entirely, same
+        # trade the watcher's threshold checks already make.
+        pools.append((tracked, cache["fable_pct"], cache.get("fable_resets_at"),
+                      _uc_cost("CLAUDE_USAGE_UC_COST_TRACKED", 8)))
+    if not pools:
+        return None
+
+    blockers, until, until_known = [], None, True
+    for label, pct, resets_at, cost in pools:
+        if resets_at is not None and (resets_at - now.timestamp()) <= 0:
+            continue  # window already rolled over server-side; not a blocker
+        if (100 - pct) < (cost + buffer):
+            blockers.append(label)
+            if resets_at is None:
+                until_known = False
+            elif until is None or resets_at > until:
+                until = resets_at
+    if not blockers:
+        return {"verdict": "ok", "blockers": [], "until": None}
+    return {"verdict": "wait", "blockers": blockers, "until": until if until_known else None}
+
+
+def fmt_ultracode(state, readiness, now):
+    """The statusline segment: the active marker wins (an in-flight run is
+    the fact worth showing; affordability of a *second* run is nobody's
+    question), else the readiness verdict, else nothing."""
+    if state:
+        mins = int(state["elapsed"].total_seconds() // 60)
+        return f"uc: ON {mins}m"
+    if not readiness:
+        return None
+    if readiness["verdict"] == "ok":
+        return "uc: ok"
+    who = "+".join(readiness["blockers"])
+    delta = fmt_delta(readiness["until"], now)
+    return f"uc: wait {delta} ({who})" if delta else f"uc: wait ({who})"
+
+
+# The 256-color ramp approximating the magenta→purple gradient Claude Code's
+# own UI paints the "ultracode" keyword with. Rendered per-character, and
+# phase-shifted by wall-clock across renders so the statusline version
+# shimmers over time the way the CLI's animated keyword does (a statusline
+# render is a still frame; the phase shift is what strings the frames into
+# the animation).
+_UC_GRADIENT = [213, 207, 201, 165, 129, 93, 99, 135]
+
+
+def fmt_ultracode_styled(state, readiness, now):
+    """The workload-line rendering of the ultracode indicator, sitting at the
+    end of that line next to the swap marker (placement per Rajan,
+    2026-08-08). Active runs get the full Claude-Code-style gradient text,
+    bold -- the one genuinely loud state this bar has, for the one state
+    that's actually burning quota. Idle states stay dim so they read as
+    ambient info, same register as the resume hint."""
+    if state:
+        mins = int(state["elapsed"].total_seconds() // 60)
+        text = f"⚡ultracode ON {mins}m"
+        phase = int(now.timestamp() // 2) % len(_UC_GRADIENT)
+        out = []
+        for i, ch in enumerate(text):
+            color = _UC_GRADIENT[(i + phase) % len(_UC_GRADIENT)]
+            out.append(f"\033[1;38;5;{color}m{ch}")
+        return "".join(out) + "\033[0m"
+    if not readiness:
+        return None
+    if readiness["verdict"] == "ok":
+        return "\033[2muc ok\033[0m"
+    who = "+".join(readiness["blockers"])
+    delta = fmt_delta(readiness["until"], now)
+    body = f"uc wait {delta} ({who})" if delta else f"uc wait ({who})"
+    return f"\033[2m{body}\033[0m"
+
+
+def ultracode_context(state, readiness, now):
+    """The SessionStart-hook sentence. Informational by default; when the
+    machine's owner has opted in with CLAUDE_USAGE_UC_AUTO=1 (a standing,
+    user-granted authorization recorded in their own config file), it also
+    carries the auto-orchestration directive so a session knows it may reach
+    for the Workflow tool on its own judgment -- and how to flip the gauge's
+    active marker so the bar reflects reality."""
+    auto = os.environ.get("CLAUDE_USAGE_UC_AUTO", "") == "1"
+    mark = "python3 ~/.claude/scripts/ultracode-mark.py"
+    if state:
+        mins = int(state["elapsed"].total_seconds() // 60)
+        reason = f" (reason: {state['reason']})" if state["reason"] else ""
+        return (
+            f"ultracode: marked ACTIVE {mins}m ago{reason} -- an orchestrated "
+            f"Workflow run is (or was) in flight. If it has finished, run "
+            f"`{mark} off` so the gauge stops showing it."
+        )
+    if not readiness:
+        return None
+    if readiness["verdict"] == "ok":
+        line = "ultracode budget: ok (one typical multi-agent Workflow run fits in every pool's remaining quota)"
+        if auto:
+            line += (
+                ". Standing auto-mode is ON (user-granted, in this machine's "
+                "claude-quota-gauge config): when a task this session clearly "
+                "warrants multi-agent orchestration, use the Workflow tool on "
+                f"your own judgment -- run `{mark} on --reason '<short task>'` "
+                f"first and `{mark} off` when the run finishes, so the "
+                "statusline gauge displays the active state."
+            )
+        return line
+    who = "+".join(readiness["blockers"])
+    delta = fmt_delta(readiness["until"], now)
+    when = f" -- clears in {delta}" if delta else ""
+    line = f"ultracode budget: tight on {who}{when}"
+    if auto:
+        line += ". Auto-mode is ON but budget-gated: do NOT start a Workflow run on your own judgment until this clears (explicit user request still overrides)."
+    return line
+
+
 THEME_STATE_PATH = os.path.expanduser("~/.claude/scripts/theme-state.json")
 # How long a session's drift-tracking entry survives with no prompts
 # touching it -- long enough to outlive a normal Claude Code session, short

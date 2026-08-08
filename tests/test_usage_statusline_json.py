@@ -102,9 +102,11 @@ class DefaultTextOutputUnchangedTest(IsolatedHomeTestCase):
         result = run_statusline(payload, home=self.home)
         self.assertEqual(result.returncode, 0, result.stderr)
         out = result.stdout.strip()
+        # Trailing "uc:" segment added in 0.15.0 -- everything before it is
+        # still required to be byte-shape unchanged.
         self.assertRegex(
             out,
-            r"^Fable 5 \| 5h: 12% \(resets \d+h \d+m\) \| week: 34% \(resets \d+h \d+m\)$",
+            r"^Fable 5 \| 5h: 12% \(resets \d+h \d+m\) \| week: 34% \(resets \d+h \d+m\) \| uc: ok$",
         )
 
     def test_default_output_is_not_json(self):

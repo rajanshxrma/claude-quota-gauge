@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-08-08
+
+### Added
+- **Ultracode gauge: a `uc:` statusline segment for multi-agent Workflow
+  runs.** Two states: `uc: ON <elapsed>` while a run is live (flipped by the
+  new `bin/ultracode-mark.py on/off`, with a read-side TTL so a dead session
+  can't leave the bar lying), and otherwise an affordability verdict —
+  `uc: ok` when one typical run fits in every pool's remaining quota,
+  `uc: wait <t> (<pool>)` naming the blocking pool and when it clears.
+  Costs are rough per-pool estimates, env-tunable (`CLAUDE_USAGE_UC_*`).
+  With the combined statusline the indicator sits at the end of the
+  workload line next to the swap marker, an active run rendered in the
+  same magenta→purple gradient Claude Code paints the `ultracode` keyword
+  with (phase-shifted per render, so it shimmers); standalone
+  `usage-statusline.py` keeps a plain segment on the quota line
+  (`--no-uc-segment` suppresses it, which is what the wrapper passes).
+- **SessionStart hook injects the same verdict**, so a session knows up
+  front whether an orchestrated run is affordable; `--json` carries it all
+  under a new `ultracode` key.
+- **Opt-in auto-mode (`CLAUDE_USAGE_UC_AUTO=1`)**: the injected context also
+  carries a standing, owner-granted authorization for a session to start a
+  Workflow run on its own judgment — budget-gated, and always marked on the
+  gauge while live. Off by default; setting the flag is the consent.
+
 ## [0.15.0] - 2026-08-06
 
 ### Added

@@ -58,12 +58,18 @@ WGAUGE = os.path.join(HERE, "workload-gauge.py")
 
 sys.path.insert(0, HERE)
 from usage_common import (  # noqa: E402
+    fmt_ultracode_styled,
+    load_env_file,
     right_align,
     session_title,
     title_chip,
     title_changed_recently,
     title_disambiguation,
+    ultracode_readiness,
+    ultracode_state,
 )
+
+load_env_file()  # the uc cost knobs live in the env file; subprocesses load it themselves
 
 payload = sys.stdin.read()  # read once; the quota line consumes it, everything else doesn't
 
@@ -84,7 +90,10 @@ except Exception:
 session_id = parsed.get("session_id")
 transcript_path = parsed.get("transcript_path")
 
-usage_line = run([sys.executable, USAGE], stdin_text=payload)
+# --no-uc-segment: the ultracode indicator renders on the workload line
+# below instead (styled, next to the swap marker -- per Rajan, 2026-08-08),
+# so the quota line doesn't carry it twice.
+usage_line = run([sys.executable, USAGE, "--no-uc-segment"], stdin_text=payload)
 
 chip = ""
 try:
@@ -101,6 +110,20 @@ if usage_line or chip:
     lines.append(right_align(usage_line, chip))
 
 seg = run([sys.executable, WGAUGE, "--segment"])
+
+# Ultracode indicator, at the end of the workload segment next to the swap
+# marker. The quota subprocess above already wrote this render's fresh cache
+# (it runs first), so reading it back here can't be a stale double-read.
+try:
+    _now = datetime.now(timezone.utc)
+    with open(os.path.join(HERE, "usage-live.json")) as _f:
+        _cache = json.load(_f)
+    uc = fmt_ultracode_styled(ultracode_state(_now), ultracode_readiness(_now, _cache), _now)
+except Exception:
+    uc = None
+if uc:
+    seg = f"{seg}  {uc}" if seg else uc
+
 resume = f"\033[2m↳ claude --resume {session_id}\033[0m" if session_id else ""
 if seg or resume:
     lines.append(right_align(seg, resume))
