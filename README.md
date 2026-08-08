@@ -319,6 +319,8 @@ shimmers over time, while the idle verdicts stay dim. Standalone
 instead (the wrapper suppresses that one via `--no-uc-segment` so it never
 shows twice).
 
+![the workload line's uc indicator in its three states: dim "uc ok" when a run fits, dim "uc wait 2h 46m (week)" naming the blocking pool, and a live run rendered as "⚡ultracode ON 12m" in the magenta→purple gradient, shimmering across renders](docs/ultracode-demo.gif)
+
 The `SessionStart` hook injects the same verdict into each new session's
 context, so the session itself knows whether a run is affordable before it
 considers starting one, and `--json` carries it all under an `ultracode`
