@@ -37,6 +37,12 @@ All notable changes to this project are documented here. Format follows
   session** unless passed `--force`, so a session can no longer silently
   kill another session's still-live run just by following stale
   instructions. `status` now reports the resolved `mine` flag too.
+- **Session-title chip color 135 (MediumPurple1) swapped for 141
+  (MediumPurple2).** 135 only cleared WCAG contrast 5.90 against black
+  text -- weakest of the eight palette entries by a wide margin (next-lowest
+  was 7.05, gold/220 hits 14.97) -- measured from each entry's actual sRGB
+  relative luminance rather than eyeballed. 141 sits at 7.73, same hue
+  bucket, so distinguishability from the rest of `_TITLE_PALETTE` holds.
 
 ## [0.17.0] - 2026-08-09
 
