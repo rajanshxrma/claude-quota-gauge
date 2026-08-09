@@ -7,21 +7,22 @@ read, instead of smoothing against history, letting one noisy sample swing
 the displayed % by ~60%) sat fixed in one install for a while with no way
 for any other install to learn about it short of manually re-cloning.
 
-Two tiers, both off unless a newer version actually exists:
+Two tiers, both no-ops unless a newer version actually exists:
 
-  - Default: notify only. Injects a one-line heads-up naming the current
-    and available version and the exact update command -- never touches
-    a file on disk. This is the tier every install gets for free, no
-    config needed.
-  - Opt-in (CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1): actually applies the
-    update -- re-downloads every file this same hook would install fresh
-    (bin/*.py, commands/*.md) straight from the pinned repo/branch below,
-    and updates the local version marker. Still always says what it did
-    in the injected context -- auto-applying is never silent, even when
-    opted in, on the same principle as everything else this tool surfaces
-    ambiently: a background change to files that run with real permissions
-    (hooks execute on every prompt) should never be invisible to the
-    person running it.
+  - Default: auto-apply. Re-downloads every file this same hook would
+    install fresh (bin/*.py, commands/*.md) straight from the pinned
+    repo/branch below, and updates the local version marker. This is the
+    tier every install gets for free, no config needed -- so a fix shipped
+    upstream (like the Fable calibration bug above) reaches every existing
+    clone within one day, not only the ones someone remembers to
+    `git pull` by hand. Still always says what it did in the injected
+    context -- auto-applying is never silent, on the same principle as
+    everything else this tool surfaces ambiently: a background change to
+    files that run with real permissions (hooks execute on every prompt)
+    should never be invisible to the person running it.
+  - Opt-out (CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0): notify only. Injects a
+    one-line heads-up naming the current and available version and the
+    exact update command -- never touches a file on disk.
 
 Deliberately NOT configurable which repo/branch this pulls from -- that's
 a fixed constant below, not an env var, so a stray misconfigured env var
@@ -51,7 +52,7 @@ VERSION_MARKER = os.path.expanduser("~/.claude/claude-quota-gauge-version")
 CHECK_STATE_PATH = os.path.join(SCRIPTS, "claude-quota-gauge-update-check.json")
 NETWORK_TIMEOUT = 4  # seconds -- a session start should never visibly hang on this
 CHECK_INTERVAL_HOURS = float(os.environ.get("CLAUDE_QUOTA_GAUGE_UPDATE_CHECK_HOURS", "24"))
-AUTO_UPDATE = os.environ.get("CLAUDE_QUOTA_GAUGE_AUTO_UPDATE") == "1"
+AUTO_UPDATE = os.environ.get("CLAUDE_QUOTA_GAUGE_AUTO_UPDATE", "1") != "0"
 UA = {"User-Agent": f"{REPO_NAME}-update-check"}
 
 
@@ -89,8 +90,8 @@ def _should_check(state, now):
 
 def _apply_update():
     """Re-downloads every bin/*.py and commands/*.md from the pinned repo
-    and overwrites the local install. Only ever called when
-    CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1. Listing via the GitHub API (not a
+    and overwrites the local install. Skipped only when
+    CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0. Listing via the GitHub API (not a
     hardcoded filename list) so a new file added upstream gets picked up
     here with zero maintenance on this hook. Downloads into temp names
     first and only renames over the real target once every fetch in the
@@ -167,15 +168,17 @@ def main():
             f"claude-quota-gauge auto-updated {local_version} -> {remote_version} "
             f"({n} files) -- see CHANGELOG.md in your clone (or "
             f"https://github.com/{REPO_OWNER}/{REPO_NAME}/blob/main/CHANGELOG.md) "
-            f"for what changed. Nothing else needed."
+            f"for what changed. Set CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0 in "
+            f"~/.claude/claude-quota-gauge.env to switch to notify-only instead. "
+            f"Nothing else needed."
         )
     else:
         context = (
             f"claude-quota-gauge {remote_version} is available (you're on "
-            f"{local_version}). Update: cd into your clone, `git pull`, then "
-            f"`./install.sh` -- or set CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1 in "
-            f"~/.claude/claude-quota-gauge.env to apply future updates "
-            f"automatically (still always announced here, never silent)."
+            f"{local_version}) -- auto-update is off (CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0). "
+            f"Update: cd into your clone, `git pull`, then `./install.sh` -- or "
+            f"unset/remove that line in ~/.claude/claude-quota-gauge.env to let "
+            f"future updates apply automatically again."
         )
 
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}))

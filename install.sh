@@ -132,8 +132,8 @@ if update_check_already_present:
 else:
     session_start.append({"hooks": [{"type": "command", "command": update_check_hook_command, "timeout": 8}]})
     print(f"  added SessionStart hook: {update_check_hook_command}")
-    print("  (checks at most once/24h for a newer claude-quota-gauge; notifies by")
-    print("  default, only auto-applies if CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1 is set)")
+    print("  (checks at most once/24h for a newer claude-quota-gauge; auto-applies")
+    print("  by default, set CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0 for notify-only)")
 
 user_prompt_submit = hooks.setdefault("UserPromptSubmit", [])
 
@@ -273,9 +273,10 @@ echo "    - the 'pending: N' count -- set up above, or any time later"
 echo "    - a background launchd watcher for threshold notifications, and"
 echo "      macOS UI-theme-drift detection (CLAUDE_USAGE_THEME_WATCH=1)"
 echo ""
-echo "  Also on by default: a once-a-day check for a newer claude-quota-gauge,"
-echo "  surfaced as a one-line heads-up (never auto-applied unless you set"
-echo "  CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=1). See README for exactly what it does."
+echo "  Also on by default: a once-a-day check for a newer claude-quota-gauge"
+echo "  that auto-applies it and tells you what changed (set"
+echo "  CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0 for notify-only instead). See README"
+echo "  for exactly what it does."
 echo ""
 echo "  All optional config lives in one place: $ENV_PATH"
 echo "  Full details on every feature: README.md"

@@ -4,6 +4,24 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - 2026-08-09
+
+### Changed
+- **Update-check default flipped: auto-apply instead of announce-only.**
+  `update-check-session-hook.py` now re-downloads and applies a newer
+  `bin/*.py`/`commands/*.md` set automatically when found, for every
+  install, with no config needed -- still always saying what it did in the
+  injected context. Set `CLAUDE_QUOTA_GAUGE_AUTO_UPDATE=0` to go back to
+  the old notify-only behavior instead. Rationale: a fix shipped upstream
+  (like the Fable calibration bug in 0.16.0) was reaching only installs
+  that either had already opted in or that someone remembered to
+  `git pull` by hand -- announce-only left every other existing clone
+  drifting behind indefinitely with no path back to current short of
+  noticing the heads-up and acting on it. This only takes effect for a
+  clone once it has updated to 0.17.0 itself; on an announce-only install,
+  the next notification still names the manual `git pull && ./install.sh`
+  command needed to get there.
+
 ## [0.16.0] - 2026-08-08
 
 ### Added
