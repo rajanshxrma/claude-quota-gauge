@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.1] - 2026-08-09
+
+### Changed
+- **A marker owned by a different session no longer shows up on this
+  session's gauge or SessionStart context at all.** 0.18.0 introduced a dim
+  "uc: ON elsewhere <n>m" statusline segment and an "another session has a
+  run" hook line for the non-owning case, as a middle ground between fully
+  hiding it and showing it as this session's own. Found live (2026-08-09):
+  Rajan didn't want that middle ground -- a session's indicator should read
+  as its own status, not a feed of what other sessions on the machine are
+  doing. Both now fall through to the plain readiness/budget verdict for a
+  non-owned marker, identical to the idle case. Nothing is actually hidden
+  in the sense that matters: the real quota cost of another session's run
+  still shows up honestly in the live readiness percentage, just not
+  narrated as a separate cross-session event.
+
 ## [0.18.0] - 2026-08-09
 
 ### Fixed

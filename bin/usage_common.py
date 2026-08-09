@@ -570,13 +570,18 @@ def ultracode_readiness(now, cache):
 def fmt_ultracode(state, readiness, now):
     """The statusline segment: the active marker wins (an in-flight run is
     the fact worth showing; affordability of a *second* run is nobody's
-    question), else the readiness verdict, else nothing. A marker owned by a
-    *different* session still gets shown -- shared quota is genuinely being
-    spent -- but tagged "elsewhere" so it never reads as this session's own
-    run."""
-    if state:
+    question), else the readiness verdict, else nothing. A marker owned by
+    a *different* session is invisible here, same as idle -- each session's
+    gauge stays specific to itself; the quota it actually costs still shows
+    up organically in the readiness verdict below (real live %), so nothing
+    is hidden, just not narrated as a foreign event on this session's own
+    line (found live 2026-08-09: an earlier version showed a dim "uc: ON
+    elsewhere" here, which Rajan didn't want -- a session's indication
+    should read as its own status, not a feed of what other sessions are
+    doing)."""
+    if state and state["mine"]:
         mins = int(state["elapsed"].total_seconds() // 60)
-        return f"uc: ON {mins}m" if state["mine"] else f"uc: ON elsewhere {mins}m"
+        return f"uc: ON {mins}m"
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
@@ -602,9 +607,10 @@ def fmt_ultracode_styled(state, readiness, now):
     bold -- the one genuinely loud state this bar has, for the one state
     that's actually burning quota. Idle states stay dim so they read as
     ambient info, same register as the resume hint. A marker owned by a
-    different session is real information (shared quota is being spent) but
-    not *this* session's event, so it stays dim rather than taking the loud
-    gradient treatment reserved for a run this session can act on."""
+    different session is invisible here, same as idle -- each session's
+    indicator reflects only its own run (found live 2026-08-09: Rajan
+    didn't want a "some other session is active" note on a session that
+    isn't itself doing anything)."""
     if state and state["mine"]:
         mins = int(state["elapsed"].total_seconds() // 60)
         text = f"⚡ultracode ON {mins}m"
@@ -614,9 +620,6 @@ def fmt_ultracode_styled(state, readiness, now):
             color = _UC_GRADIENT[(i + phase) % len(_UC_GRADIENT)]
             out.append(f"\033[1;38;5;{color}m{ch}")
         return "".join(out) + "\033[0m"
-    if state and not state["mine"]:
-        mins = int(state["elapsed"].total_seconds() // 60)
-        return f"\033[2m⚡uc elsewhere {mins}m\033[0m"
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
@@ -635,12 +638,18 @@ def ultracode_context(state, readiness, now):
     for the Workflow tool on its own judgment -- and how to flip the gauge's
     active marker so the bar reflects reality.
 
-    The marker file is machine-wide (one shared quota pool), so a run
-    another session started still shows up here -- but the "turn it off
-    when it's done" instruction is addressed only to the session that owns
-    it (state["mine"]); a session that didn't start the run has no way to
-    judge whether it's finished, and telling it to flip the marker off
-    invites it to kill a run that's still genuinely in flight elsewhere."""
+    The marker file is machine-wide (one shared quota pool), but a marker
+    owned by a *different* session (state["mine"] is False) is treated as
+    if idle here, same as the statusline -- this session's own context stays
+    specific to itself rather than narrating what another session is doing
+    (found live 2026-08-09: an earlier version surfaced an "another session
+    has a run" line here, which Rajan didn't want). The real cost of that
+    other run still shows up on its own, honestly, in the readiness verdict
+    below (live %), so nothing is actually hidden -- just not called out as
+    a foreign event on a session that isn't the one spending it. Only the
+    owning session ever sees the "turn it off when it's done" instruction,
+    since only it has any basis to judge whether the run is actually
+    finished."""
     auto = os.environ.get("CLAUDE_USAGE_UC_AUTO", "") == "1"
     mark = "python3 ~/.claude/scripts/ultracode-mark.py"
     if state and state["mine"]:
@@ -651,18 +660,8 @@ def ultracode_context(state, readiness, now):
             f"Workflow run is (or was) in flight. If it has finished, run "
             f"`{mark} off` so the gauge stops showing it."
         )
-    elsewhere = ""
-    if state and not state["mine"]:
-        mins = int(state["elapsed"].total_seconds() // 60)
-        reason = f" (reason: {state['reason']})" if state["reason"] else ""
-        elsewhere = (
-            f"ultracode: another session has a Workflow run marked ACTIVE "
-            f"{mins}m ago{reason} -- shared quota is being spent by that "
-            f"session, not this one; this session doesn't own the marker "
-            f"and shouldn't turn it off. "
-        )
     if not readiness:
-        return elsewhere or None
+        return None
     if readiness["verdict"] == "ok":
         line = (
             "ultracode budget: ok (one typical multi-agent Workflow run fits "
@@ -681,14 +680,14 @@ def ultracode_context(state, readiness, now):
                 "your own judgment without waiting for the keyword -- same "
                 "marking discipline."
             )
-        return elsewhere + line
+        return line
     who = "+".join(readiness["blockers"])
     delta = fmt_delta(readiness["until"], now)
     when = f" -- clears in {delta}" if delta else ""
     line = f"ultracode budget: tight on {who}{when}"
     if auto:
         line += ". Auto-mode is ON but budget-gated: do NOT start a Workflow run on your own judgment until this clears (explicit user request still overrides)."
-    return elsewhere + line
+    return line
 
 
 THEME_STATE_PATH = os.path.expanduser("~/.claude/scripts/theme-state.json")

@@ -107,30 +107,33 @@ class ActiveMarkerTest(IsolatedHomeTestCase):
         self.assertIn("| uc: ON 42m", out)
         self.assertNotIn("uc: wait", out)
 
-    def test_active_marker_from_other_session_shows_elsewhere(self):
-        # A run owned by a different session is real, shown info -- but
-        # tagged distinctly and never the loud "uc: ON <n>m" form, so it
-        # can't be mistaken for this session's own run.
+    def test_active_marker_from_other_session_is_invisible_here(self):
+        # A run owned by a different session must not appear on this
+        # session's gauge at all -- each session's indicator stays specific
+        # to itself, falling through to the plain readiness verdict exactly
+        # as if no marker existed.
         write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(minutes=42),
                         session_id="session-a")
         payload, _ = basic_payload(datetime.now(timezone.utc), five_hour_pct=90)
         out = run_statusline(payload, home=self.home,
                               extra_env={"CLAUDE_CODE_SESSION_ID": "session-b"}).stdout.strip()
-        self.assertIn("| uc: ON elsewhere 42m", out)
-        self.assertNotRegex(out, r"\| uc: ON 42m$")
+        self.assertNotIn("uc: ON", out)
+        self.assertRegex(out, r"\| uc: wait \d+h \d+m \(5h\)$")
 
     def test_active_marker_with_no_session_id_is_never_mine(self):
-        # Markers written before this ownership fix (or by a manual `on`
+        # Markers written before the ownership fix (or by a manual `on`
         # with no CLAUDE_CODE_SESSION_ID in the environment) carry no
-        # session id at all -- unclaimable by anyone, so every reader sees
-        # "elsewhere" rather than one session lucking into "mine" by
-        # matching an empty string against an empty string.
+        # session id at all -- unclaimable by anyone, so every reader falls
+        # through to its own readiness verdict rather than one session
+        # lucking into "mine" by matching an empty string against an empty
+        # string.
         write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(minutes=5),
                         session_id="")
         payload, _ = basic_payload(datetime.now(timezone.utc))
         out = run_statusline(payload, home=self.home,
                               extra_env={"CLAUDE_CODE_SESSION_ID": ""}).stdout.strip()
-        self.assertIn("| uc: ON elsewhere 5m", out)
+        self.assertNotIn("uc: ON", out)
+        self.assertIn("| uc: ok", out)
 
     def test_expired_marker_falls_back_to_readiness(self):
         write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(hours=5),
@@ -233,17 +236,17 @@ class SessionHookTest(IsolatedHomeTestCase):
         self.assertIn("repo-wide audit", ctx)
         self.assertIn("ultracode-mark.py off", ctx)
 
-    def test_hook_surfaces_other_sessions_run_without_off_instruction(self):
-        # The reading session didn't start this run and can't know whether
-        # it's finished -- it should hear about it, but never be told to
-        # turn it off itself.
+    def test_hook_is_silent_about_other_sessions_run(self):
+        # A run owned by a different session must not surface here at all
+        # -- this session's context stays specific to itself, falling
+        # through to the plain budget verdict exactly as if idle.
         self._seed_cache()
         write_uc_state(self.home, reason="repo-wide audit", session_id="session-a")
         ctx = self._hook_context(extra_env={"CLAUDE_CODE_SESSION_ID": "session-b"})
-        self.assertIn("another session", ctx)
-        self.assertIn("repo-wide audit", ctx)
-        self.assertIn("shouldn't turn it off", ctx)
-        self.assertNotIn("If it has finished, run", ctx)
+        self.assertNotIn("another session", ctx)
+        self.assertNotIn("repo-wide audit", ctx)
+        self.assertNotIn("marked ACTIVE", ctx)
+        self.assertIn("ultracode budget: ok", ctx)
 
 
 if __name__ == "__main__":
