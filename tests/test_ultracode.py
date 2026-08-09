@@ -22,7 +22,15 @@ HOOK = os.path.join(REPO_ROOT, "bin", "usage-session-hook.py")
 
 
 def run_script(script, args=None, home=None, extra_env=None):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_USAGE")}
+    # CLAUDE_CODE_SESSION_ID stripped from the inherited base for the same
+    # reason as run_statusline() in test_usage_statusline_json.py: whatever
+    # session happens to be running the tests must not silently become the
+    # "owner" of a test-written marker. Tests that need a specific id (or
+    # none at all) set it explicitly via extra_env.
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("CLAUDE_USAGE") and k != "CLAUDE_CODE_SESSION_ID"
+    }
     env["HOME"] = home
     env["USERPROFILE"] = home
     env["PYTHONUTF8"] = "1"
@@ -35,11 +43,14 @@ def run_script(script, args=None, home=None, extra_env=None):
     )
 
 
-def write_uc_state(home, active=True, since=None, reason="test task"):
+def write_uc_state(home, active=True, since=None, reason="test task", session_id=""):
     path = os.path.join(home, ".claude", "scripts", "ultracode-state.json")
     since = since or datetime.now(timezone.utc)
     with open(path, "w") as f:
-        json.dump({"active": active, "since": since.isoformat(), "reason": reason}, f)
+        json.dump({
+            "active": active, "since": since.isoformat(), "reason": reason,
+            "session_id": session_id,
+        }, f)
     return path
 
 
@@ -88,34 +99,83 @@ class NoUcSegmentFlagTest(IsolatedHomeTestCase):
 
 class ActiveMarkerTest(IsolatedHomeTestCase):
     def test_active_marker_wins_over_readiness(self):
-        write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(minutes=42))
+        write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(minutes=42),
+                        session_id="session-mine")
         payload, _ = basic_payload(datetime.now(timezone.utc), five_hour_pct=90)
-        out = run_statusline(payload, home=self.home).stdout.strip()
+        out = run_statusline(payload, home=self.home,
+                              extra_env={"CLAUDE_CODE_SESSION_ID": "session-mine"}).stdout.strip()
         self.assertIn("| uc: ON 42m", out)
         self.assertNotIn("uc: wait", out)
 
-    def test_expired_marker_falls_back_to_readiness(self):
-        write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(hours=5))
+    def test_active_marker_from_other_session_shows_elsewhere(self):
+        # A run owned by a different session is real, shown info -- but
+        # tagged distinctly and never the loud "uc: ON <n>m" form, so it
+        # can't be mistaken for this session's own run.
+        write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(minutes=42),
+                        session_id="session-a")
+        payload, _ = basic_payload(datetime.now(timezone.utc), five_hour_pct=90)
+        out = run_statusline(payload, home=self.home,
+                              extra_env={"CLAUDE_CODE_SESSION_ID": "session-b"}).stdout.strip()
+        self.assertIn("| uc: ON elsewhere 42m", out)
+        self.assertNotRegex(out, r"\| uc: ON 42m$")
+
+    def test_active_marker_with_no_session_id_is_never_mine(self):
+        # Markers written before this ownership fix (or by a manual `on`
+        # with no CLAUDE_CODE_SESSION_ID in the environment) carry no
+        # session id at all -- unclaimable by anyone, so every reader sees
+        # "elsewhere" rather than one session lucking into "mine" by
+        # matching an empty string against an empty string.
+        write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(minutes=5),
+                        session_id="")
         payload, _ = basic_payload(datetime.now(timezone.utc))
-        out = run_statusline(payload, home=self.home).stdout.strip()
+        out = run_statusline(payload, home=self.home,
+                              extra_env={"CLAUDE_CODE_SESSION_ID": ""}).stdout.strip()
+        self.assertIn("| uc: ON elsewhere 5m", out)
+
+    def test_expired_marker_falls_back_to_readiness(self):
+        write_uc_state(self.home, since=datetime.now(timezone.utc) - timedelta(hours=5),
+                        session_id="session-mine")
+        payload, _ = basic_payload(datetime.now(timezone.utc))
+        out = run_statusline(payload, home=self.home,
+                              extra_env={"CLAUDE_CODE_SESSION_ID": "session-mine"}).stdout.strip()
         self.assertIn("| uc: ok", out)
         self.assertNotIn("uc: ON", out)
 
     def test_mark_on_off_roundtrip(self):
         payload, _ = basic_payload(datetime.now(timezone.utc))
-        result = run_script(MARK, ["on", "--reason", "big refactor"], home=self.home)
+        env = {"CLAUDE_CODE_SESSION_ID": "session-mine"}
+        result = run_script(MARK, ["on", "--reason", "big refactor"], home=self.home,
+                             extra_env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        out = run_statusline(payload, home=self.home).stdout.strip()
+        out = run_statusline(payload, home=self.home, extra_env=env).stdout.strip()
         self.assertIn("| uc: ON 0m", out)
 
-        status = json.loads(run_script(MARK, ["status"], home=self.home).stdout)
+        status = json.loads(run_script(MARK, ["status"], home=self.home, extra_env=env).stdout)
         self.assertTrue(status["active"])
+        self.assertTrue(status["mine"])
         self.assertEqual(status["reason"], "big refactor")
 
-        run_script(MARK, ["off"], home=self.home)
-        out = run_statusline(payload, home=self.home).stdout.strip()
+        # A different session can't clear it without --force...
+        other = {"CLAUDE_CODE_SESSION_ID": "session-other"}
+        refused = run_script(MARK, ["off"], home=self.home, extra_env=other)
+        self.assertNotEqual(refused.returncode, 0)
+        status = json.loads(run_script(MARK, ["status"], home=self.home, extra_env=env).stdout)
+        self.assertTrue(status["active"])
+
+        # ...but the owning session can, plainly.
+        run_script(MARK, ["off"], home=self.home, extra_env=env)
+        out = run_statusline(payload, home=self.home, extra_env=env).stdout.strip()
         self.assertNotIn("uc: ON", out)
-        status = json.loads(run_script(MARK, ["status"], home=self.home).stdout)
+        status = json.loads(run_script(MARK, ["status"], home=self.home, extra_env=env).stdout)
+        self.assertFalse(status["active"])
+
+    def test_off_with_force_clears_other_sessions_marker(self):
+        env_a = {"CLAUDE_CODE_SESSION_ID": "session-a"}
+        env_b = {"CLAUDE_CODE_SESSION_ID": "session-b"}
+        run_script(MARK, ["on", "--reason", "batch job"], home=self.home, extra_env=env_a)
+        forced = run_script(MARK, ["off", "--force"], home=self.home, extra_env=env_b)
+        self.assertEqual(forced.returncode, 0, forced.stderr)
+        status = json.loads(run_script(MARK, ["status"], home=self.home, extra_env=env_a).stdout)
         self.assertFalse(status["active"])
 
 
@@ -165,12 +225,25 @@ class SessionHookTest(IsolatedHomeTestCase):
         self.assertIn("budget-gated", ctx)
         self.assertIn("do NOT start a Workflow run", ctx)
 
-    def test_hook_surfaces_active_run(self):
+    def test_hook_surfaces_own_active_run_with_off_instruction(self):
         self._seed_cache()
-        write_uc_state(self.home, reason="repo-wide audit")
-        ctx = self._hook_context()
+        write_uc_state(self.home, reason="repo-wide audit", session_id="session-mine")
+        ctx = self._hook_context(extra_env={"CLAUDE_CODE_SESSION_ID": "session-mine"})
         self.assertIn("marked ACTIVE", ctx)
         self.assertIn("repo-wide audit", ctx)
+        self.assertIn("ultracode-mark.py off", ctx)
+
+    def test_hook_surfaces_other_sessions_run_without_off_instruction(self):
+        # The reading session didn't start this run and can't know whether
+        # it's finished -- it should hear about it, but never be told to
+        # turn it off itself.
+        self._seed_cache()
+        write_uc_state(self.home, reason="repo-wide audit", session_id="session-a")
+        ctx = self._hook_context(extra_env={"CLAUDE_CODE_SESSION_ID": "session-b"})
+        self.assertIn("another session", ctx)
+        self.assertIn("repo-wide audit", ctx)
+        self.assertIn("shouldn't turn it off", ctx)
+        self.assertNotIn("If it has finished, run", ctx)
 
 
 if __name__ == "__main__":

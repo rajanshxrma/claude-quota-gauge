@@ -35,13 +35,17 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO_ROOT, "bin", "usage-statusline.py")
 
 
-def run_statusline(payload, args=None, home=None):
+def run_statusline(payload, args=None, home=None, extra_env=None):
     """Runs the real script as a subprocess against an isolated HOME.
 
     Strips any CLAUDE_USAGE_* vars inherited from the real shell/env file so
     a developer's actual ~/.claude/claude-quota-gauge.env can never leak
     into a test run (load_env_file() only sets vars that aren't already
-    set, so an inherited real value would otherwise silently win).
+    set, so an inherited real value would otherwise silently win). Also
+    strips CLAUDE_CODE_SESSION_ID -- the real value of whatever session
+    happens to be running the tests must never determine ultracode
+    ownership results; tests that care about "mine" vs. "elsewhere" pin an
+    explicit synthetic id via extra_env instead.
 
     HOME alone is not enough to isolate on Windows: os.path.expanduser("~")
     consults USERPROFILE first there and ignores HOME entirely, so the
@@ -50,7 +54,10 @@ def run_statusline(payload, args=None, home=None):
     of the throwaway tempdir. Pin both so ~ really lands in the isolated
     home on every platform.
     """
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_USAGE")}
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("CLAUDE_USAGE") and k != "CLAUDE_CODE_SESSION_ID"
+    }
     env["HOME"] = home
     env["USERPROFILE"] = home
     # The rendered bar contains a U+2026 ellipsis ("refreshing…"). Without
@@ -58,6 +65,8 @@ def run_statusline(payload, args=None, home=None):
     # decodes as mojibake, breaking substring assertions on that text.
     env["PYTHONUTF8"] = "1"
     env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
+    if extra_env:
+        env.update(extra_env)
     cmd = [sys.executable, SCRIPT] + (args or [])
     return subprocess.run(
         cmd, input=json.dumps(payload), capture_output=True, text=True,

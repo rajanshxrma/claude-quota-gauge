@@ -4,6 +4,40 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] - 2026-08-09
+
+### Fixed
+- **The `uc:` active-run marker was machine-wide with no per-session
+  ownership, so marking ultracode ON in one session made every other open
+  session's gauge show "uc: ON" too** -- including a SessionStart hook line
+  that told the *reading* session to run `ultracode-mark.py off` "if it has
+  finished," even when that session had no way to know whether the run it
+  didn't start was actually done. Found live (2026-08-09): Rajan had Fable
+  set up standing ultracode auto-mode in one session and, separately,
+  noticed a stale marker from an unrelated batch job showing as ON across
+  unrelated sessions.
+
+### Added
+- **`ultracode-mark.py on` now tags the marker with the caller's own
+  `CLAUDE_CODE_SESSION_ID` by default** (the Claude Code CLI sets this env
+  var on every subprocess it spawns, so no explicit flag is needed).
+  `ultracode_state()` compares that tag against the *reading* session's own
+  id and returns a `mine` flag. The statusline (`fmt_ultracode`,
+  `fmt_ultracode_styled`) and the SessionStart hook sentence
+  (`ultracode_context`) now render differently depending on ownership: the
+  owning session still gets the loud gradient "⚡ultracode ON" treatment and
+  the "run off when done" instruction; every other session sees a dim
+  "elsewhere" notice instead -- informational (shared quota really is being
+  spent), but not addressed as an action for that session to take. A
+  pre-existing marker with no session id (written before this version, or
+  by a manual `on` without the env var present) can't be claimed by anyone
+  and now renders as "elsewhere" everywhere rather than defaulting to
+  "mine" for whichever session happens to read it first.
+- **`ultracode-mark.py off` refuses to clear a marker owned by a different
+  session** unless passed `--force`, so a session can no longer silently
+  kill another session's still-live run just by following stale
+  instructions. `status` now reports the resolved `mine` flag too.
+
 ## [0.17.0] - 2026-08-09
 
 ### Changed

@@ -467,13 +467,27 @@ def _uc_cost(name, default):
         return default
 
 
+def current_session_id():
+    """This process's own Claude Code session id, set by the CLI on every
+    subprocess it spawns (hooks, the statusline command, and any shell a
+    session's Bash tool runs) -- so it's available identically whether
+    ultracode_state() is being read from inside the session that owns a
+    marker or from a sibling session's statusline render."""
+    return os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+
+
 def ultracode_state(now):
     """Reads the shared active-run marker (written by ultracode-mark.py when
-    a session starts or finishes an orchestrated Workflow run). Returns None
-    when idle. An active entry older than its TTL counts as expired, not
-    active -- a crashed or killed session must never leave the gauge claiming
-    a run is live forever. Expiry is judged read-side (nothing is repaired on
-    disk) so every statusline render stays write-free."""
+    a session starts or finishes an orchestrated Workflow run). The marker
+    file itself is machine-wide, not per-session -- one Workflow run anywhere
+    spends from the same 5h/weekly quota every session shares -- but each
+    reader still needs to know whether *it* is the owner, so callers don't
+    address instructions like "run ultracode-mark.py off" at a session that
+    didn't start the run. Returns None when idle. An active entry older than
+    its TTL counts as expired, not active -- a crashed or killed session must
+    never leave the gauge claiming a run is live forever. Expiry is judged
+    read-side (nothing is repaired on disk) so every statusline render stays
+    write-free."""
     if not os.path.exists(UC_STATE_PATH):
         return None
     try:
@@ -488,11 +502,17 @@ def ultracode_state(now):
     elapsed = now - since
     if elapsed > ttl or elapsed < timedelta(0):
         return None
+    marker_session = state.get("session_id") or ""
     return {
         "since": since,
         "elapsed": elapsed,
         "reason": state.get("reason") or "",
-        "session_id": state.get("session_id") or "",
+        "session_id": marker_session,
+        # A blank marker session id (pre-fix markers, or "on" run manually
+        # without the env var present) can't be claimed by anyone -- treat
+        # it as "not mine" everywhere rather than guessing, so it never
+        # falsely lights up as this session's own run.
+        "mine": bool(marker_session) and marker_session == current_session_id(),
     }
 
 
@@ -550,10 +570,13 @@ def ultracode_readiness(now, cache):
 def fmt_ultracode(state, readiness, now):
     """The statusline segment: the active marker wins (an in-flight run is
     the fact worth showing; affordability of a *second* run is nobody's
-    question), else the readiness verdict, else nothing."""
+    question), else the readiness verdict, else nothing. A marker owned by a
+    *different* session still gets shown -- shared quota is genuinely being
+    spent -- but tagged "elsewhere" so it never reads as this session's own
+    run."""
     if state:
         mins = int(state["elapsed"].total_seconds() // 60)
-        return f"uc: ON {mins}m"
+        return f"uc: ON {mins}m" if state["mine"] else f"uc: ON elsewhere {mins}m"
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
@@ -578,8 +601,11 @@ def fmt_ultracode_styled(state, readiness, now):
     2026-08-08). Active runs get the full Claude-Code-style gradient text,
     bold -- the one genuinely loud state this bar has, for the one state
     that's actually burning quota. Idle states stay dim so they read as
-    ambient info, same register as the resume hint."""
-    if state:
+    ambient info, same register as the resume hint. A marker owned by a
+    different session is real information (shared quota is being spent) but
+    not *this* session's event, so it stays dim rather than taking the loud
+    gradient treatment reserved for a run this session can act on."""
+    if state and state["mine"]:
         mins = int(state["elapsed"].total_seconds() // 60)
         text = f"⚡ultracode ON {mins}m"
         phase = int(now.timestamp() // 2) % len(_UC_GRADIENT)
@@ -588,6 +614,9 @@ def fmt_ultracode_styled(state, readiness, now):
             color = _UC_GRADIENT[(i + phase) % len(_UC_GRADIENT)]
             out.append(f"\033[1;38;5;{color}m{ch}")
         return "".join(out) + "\033[0m"
+    if state and not state["mine"]:
+        mins = int(state["elapsed"].total_seconds() // 60)
+        return f"\033[2m⚡uc elsewhere {mins}m\033[0m"
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
@@ -604,10 +633,17 @@ def ultracode_context(state, readiness, now):
     user-granted authorization recorded in their own config file), it also
     carries the auto-orchestration directive so a session knows it may reach
     for the Workflow tool on its own judgment -- and how to flip the gauge's
-    active marker so the bar reflects reality."""
+    active marker so the bar reflects reality.
+
+    The marker file is machine-wide (one shared quota pool), so a run
+    another session started still shows up here -- but the "turn it off
+    when it's done" instruction is addressed only to the session that owns
+    it (state["mine"]); a session that didn't start the run has no way to
+    judge whether it's finished, and telling it to flip the marker off
+    invites it to kill a run that's still genuinely in flight elsewhere."""
     auto = os.environ.get("CLAUDE_USAGE_UC_AUTO", "") == "1"
     mark = "python3 ~/.claude/scripts/ultracode-mark.py"
-    if state:
+    if state and state["mine"]:
         mins = int(state["elapsed"].total_seconds() // 60)
         reason = f" (reason: {state['reason']})" if state["reason"] else ""
         return (
@@ -615,8 +651,18 @@ def ultracode_context(state, readiness, now):
             f"Workflow run is (or was) in flight. If it has finished, run "
             f"`{mark} off` so the gauge stops showing it."
         )
+    elsewhere = ""
+    if state and not state["mine"]:
+        mins = int(state["elapsed"].total_seconds() // 60)
+        reason = f" (reason: {state['reason']})" if state["reason"] else ""
+        elsewhere = (
+            f"ultracode: another session has a Workflow run marked ACTIVE "
+            f"{mins}m ago{reason} -- shared quota is being spent by that "
+            f"session, not this one; this session doesn't own the marker "
+            f"and shouldn't turn it off. "
+        )
     if not readiness:
-        return None
+        return elsewhere or None
     if readiness["verdict"] == "ok":
         line = (
             "ultracode budget: ok (one typical multi-agent Workflow run fits "
@@ -635,14 +681,14 @@ def ultracode_context(state, readiness, now):
                 "your own judgment without waiting for the keyword -- same "
                 "marking discipline."
             )
-        return line
+        return elsewhere + line
     who = "+".join(readiness["blockers"])
     delta = fmt_delta(readiness["until"], now)
     when = f" -- clears in {delta}" if delta else ""
     line = f"ultracode budget: tight on {who}{when}"
     if auto:
         line += ". Auto-mode is ON but budget-gated: do NOT start a Workflow run on your own judgment until this clears (explicit user request still overrides)."
-    return line
+    return elsewhere + line
 
 
 THEME_STATE_PATH = os.path.expanduser("~/.claude/scripts/theme-state.json")
@@ -1336,7 +1382,13 @@ def title_disambiguation(session_id, title):
 # hash landed there would look like a literal duplicate of the native chip
 # rather than just coincidentally matching text -- swapped for 172
 # (a warm goldenrod), a hue bucket nothing else here is close to.
-_TITLE_PALETTE = [39, 208, 135, 172, 205, 220, 41, 203]
+# 135 (MediumPurple1) originally sat here but only cleared WCAG contrast
+# 5.90 against black text -- weakest of the eight by a wide margin (the
+# next-lowest was 7.05, and 220/gold hits 14.97), confirmed by measuring
+# each entry's actual sRGB relative luminance rather than eyeballing it.
+# Replaced with 141 (MediumPurple2, one step lighter/bluer), contrast 7.73,
+# same hue bucket so distinguishability from the rest of the set holds.
+_TITLE_PALETTE = [39, 208, 141, 172, 205, 220, 41, 203]
 
 
 def _session_color(session_id):

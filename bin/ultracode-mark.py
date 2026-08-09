@@ -6,12 +6,21 @@ statusline segment (see fmt_ultracode in usage_common.py) reads the marker
 every render, so the bar shows "uc: ON <elapsed>" the whole time a run is
 live and goes back to the affordability verdict when it isn't.
 
+The marker file is machine-wide -- one shared quota pool, so a run started
+in any session is visible to every session's statusline -- but `on` tags it
+with the caller's own CLAUDE_CODE_SESSION_ID by default, and every reader
+compares that against its own id to decide whether the run is "mine". Only
+the owning session gets the loud "uc: ON" treatment and the "run off when
+done" instruction; other sessions see a dim "elsewhere" note instead, so
+turning off a run neither you nor the calling session actually started
+requires --force (see `off` below).
+
 The marker carries a TTL (CLAUDE_USAGE_UC_TTL_HOURS, default 4) judged
 read-side, so a session that dies mid-run without ever marking off can't
 leave the gauge lying forever -- see ultracode_state().
 
-`status` prints the resolved state (active/idle + readiness verdict) as
-JSON, for scripts or a quick manual check.
+`status` prints the resolved state (active/idle, ownership, and readiness
+verdict) as JSON, for scripts or a quick manual check.
 """
 import argparse
 import json
@@ -31,7 +40,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["on", "off", "status"])
     parser.add_argument("--reason", default="", help="short label for what the run is doing (shown by the SessionStart hook)")
-    parser.add_argument("--session-id", default="", help="optional owning session id, for later debugging of a stuck marker")
+    parser.add_argument(
+        "--session-id",
+        default=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
+        help="owning session id; defaults to this process's own CLAUDE_CODE_SESSION_ID "
+             "(set by the Claude Code CLI on every subprocess it spawns) so a plain "
+             "`on` already tags the marker correctly -- override only for manual testing",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="allow `off` to clear a marker owned by a different session "
+             "(normally refused, since this session has no way to know "
+             "whether that other run actually finished)",
+    )
     args = parser.parse_args()
 
     load_env_file()
@@ -57,6 +78,17 @@ def main():
                     state = json.load(f)
             except Exception:
                 state = {}
+        marker_session = state.get("session_id") or ""
+        my_session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        if (state.get("active") and marker_session and marker_session != my_session
+                and not args.force):
+            print(
+                f"refusing: this marker belongs to a different session "
+                f"({marker_session}), not this one ({my_session or 'unknown'}) -- "
+                f"pass --force if you've confirmed that run actually finished",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         state["active"] = False
         state["ended_at"] = now.isoformat()
         with open(UC_STATE_PATH, "w") as f:
@@ -73,6 +105,7 @@ def main():
         state = ultracode_state(now)
         print(json.dumps({
             "active": bool(state),
+            "mine": state["mine"] if state else None,
             "since": state["since"].isoformat() if state else None,
             "reason": state["reason"] if state else None,
             "readiness": ultracode_readiness(now, cache),
