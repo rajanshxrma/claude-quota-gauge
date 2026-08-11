@@ -1,6 +1,6 @@
 """Shared helpers for the statusline renderer, the SessionStart hook, and the
 background watcher."""
-import hashlib, json, os, re, subprocess, sys
+import hashlib, json, os, re, statistics, subprocess, sys
 from datetime import datetime, timedelta, timezone
 
 FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.json")
@@ -455,6 +455,10 @@ def fable_stale_elapsed(cache, now):
 
 
 UC_STATE_PATH = os.path.expanduser("~/.claude/scripts/ultracode-state.json")
+# Rolling history of real per-run pool deltas, appended to by
+# ultracode-mark.py's `off` action -- see ultracode_observed_cost() below for
+# how this feeds back into readiness estimates.
+UC_HISTORY_PATH = os.path.expanduser("~/.claude/scripts/ultracode-history.json")
 
 
 def _uc_cost(name, default):
@@ -516,39 +520,159 @@ def ultracode_state(now):
     }
 
 
+def ultracode_observed_cost(label, min_samples=3, max_samples=10):
+    """Real observed per-run cost for one pool, in percentage points, derived
+    from the rolling history ultracode-mark.py's `off` action appends to
+    (UC_HISTORY_PATH) -- one entry per completed run, each carrying the
+    actual pct delta measured across that run's on/off window for every pool
+    that had a clean before/after snapshot (see ultracode-mark.py's `off`
+    handler: a pool whose window rolled over mid-run, or whose on-time
+    snapshot is missing, is recorded as null there rather than a misleading
+    delta, so this never has to guess which numbers are trustworthy).
+
+    Uses the median, not the mean, of up to the most recent `max_samples`
+    non-null deltas for this pool -- a single unusually large or unusually
+    small run (a one-off giant refactor, or a run cut short) shouldn't swing
+    the whole estimate the way it would swing a mean, and real runs vary
+    enough in shape that this is genuinely a fat-tailed distribution, not a
+    tight bell curve a mean would represent well.
+
+    `label` is matched to the history record's key the same way the pool is
+    matched in `ultracode_readiness` below: "5h" -> five_hour_delta, "week"
+    -> seven_day_delta, anything else is treated as a tracked-model name and
+    matched against each record's own `tracked_model` field before pulling
+    `tracked_delta` -- so if the tracked model ever changes (CLAUDE_USAGE_
+    TRACK_MODEL edited, or a different model calibrated), history recorded
+    under the old model's name is never silently averaged into the new
+    model's estimate.
+
+    Requires at least `min_samples` real data points before returning
+    anything -- one or two runs is noise, not a trend, and a readiness
+    verdict built on noise is worse than one built on the deliberately rough
+    static default it falls back to. Returns None (not 0, not the default)
+    whenever the history file is missing, unreadable, or thin, so the caller
+    can fall back to the env-tunable CLAUDE_USAGE_UC_COST_* default exactly
+    as it did before this existed -- a fresh install or a wiped history file
+    degrades to the old static behavior, never to an unreliable number
+    pretending to be observed."""
+    if not os.path.exists(UC_HISTORY_PATH):
+        return None
+    try:
+        with open(UC_HISTORY_PATH) as f:
+            history = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(history, list):
+        return None
+
+    if label == "5h":
+        key = "five_hour_delta"
+    elif label == "week":
+        key = "seven_day_delta"
+    else:
+        key = "tracked_delta"
+
+    deltas = []
+    for entry in reversed(history):
+        if not isinstance(entry, dict):
+            continue
+        if key == "tracked_delta" and entry.get("tracked_model") != label:
+            continue
+        val = entry.get(key)
+        if val is None:
+            continue
+        try:
+            deltas.append(float(val))
+        except (TypeError, ValueError):
+            continue
+        if len(deltas) >= max_samples:
+            break
+
+    if len(deltas) < min_samples:
+        return None
+    return statistics.median(deltas)
+
+
 def ultracode_readiness(now, cache):
     """Verdict on whether one typical ultracode (multi-agent Workflow) run
-    fits in the quota that's left. Judged per pool against a rough,
-    env-tunable estimate of what a medium run burns, in percentage points of
-    that pool, plus a reserve buffer so a run never lands exactly on 100%:
+    fits in the quota that's left. Judged per pool against a per-run cost
+    estimate in percentage points of that pool, plus a reserve buffer so a
+    run never lands exactly on 100%.
 
-      CLAUDE_USAGE_UC_COST_5H       default 20   (5h block points)
-      CLAUDE_USAGE_UC_COST_WEEK     default 6    (weekly points)
-      CLAUDE_USAGE_UC_COST_TRACKED  default 8    (tracked-model weekly points)
-      CLAUDE_USAGE_UC_BUFFER        default 3    (reserve on every pool)
+    Two ways that cost is derived, preferred in this order:
 
-    The defaults are deliberately rough -- they exist to catch the obvious
-    cases (plenty of room vs. clearly about to cap), not to model a specific
-    workflow. Tune them against your own observed burns.
+      1. **Real observed cost** (see `ultracode_observed_cost()` above) --
+         the median of this pool's actual measured deltas across the last
+         several completed runs. `ultracode-mark.py on` snapshots each
+         pool's % and resets_at at the moment a run starts; `off` re-reads
+         the cache and records how many points that pool actually moved
+         (skipping any pool whose window rolled over mid-run, since the
+         delta would then reflect a reset, not the run). This is the real
+         thing this machine's runs actually cost, not a guess -- and it
+         only gets more accurate as more runs get properly bracketed with
+         on/off.
+      2. **Static env-tunable default** -- used whenever real history is too
+         thin (fewer than `ultracode_observed_cost`'s `min_samples`, default
+         3 runs) or missing entirely (fresh install, wiped history file):
 
-    Returns None when no pool data is cached at all, else
-    {"verdict": "ok"|"wait", "blockers": [labels], "until": epoch|None}
-    where `until` is the latest reset among blocked pools (when every
-    blocked pool reports one) -- i.e. when the answer flips back to ok."""
+           CLAUDE_USAGE_UC_COST_5H       default 20   (5h block points)
+           CLAUDE_USAGE_UC_COST_WEEK     default 6    (weekly points)
+           CLAUDE_USAGE_UC_COST_TRACKED  default 8    (tracked-model weekly points)
+
+         Deliberately rough -- exists to catch the obvious cases (plenty of
+         room vs. clearly about to cap), not to model a specific workflow,
+         until enough real runs have accumulated to replace it.
+
+    CLAUDE_USAGE_UC_BUFFER (default 3) is the reserve kept on every pool on
+    top of the assumed cost, regardless of which of the two sources above
+    supplied it.
+
+    Returns None when no pool data is cached at all, else one of:
+
+      {"verdict": "wait", "blockers": [labels], "until": epoch|None}
+
+        when at least one pool doesn't have enough headroom left for one
+        more run plus the buffer -- `until` is the latest reset among
+        blocked pools (when every blocked pool reports one), i.e. when the
+        answer flips back to ok; or
+
+      {"verdict": "ok", "blockers": [], "until": None,
+       "marginal": bool, "margin_notes": [...]}
+
+        when every pool has room. `marginal` / `margin_notes` are an
+        *additive* signal layered on top of a still-genuinely-affordable
+        "ok" -- never a third verdict value, so every existing
+        `readiness["verdict"] == "ok"` check across the codebase keeps
+        working unchanged. A pool lands in `margin_notes` for one of two
+        reasons (CLAUDE_USAGE_UC_MARGIN / _RESET_SOON / _RESET_SOON_PCT):
+        "thin" when the headroom that would remain *after* one more run
+        (`(100-pct) - cost`) falls under the margin, with `headroom_after`
+        attached; or "reset_soon" when the pool's own reset is imminent AND
+        it already carries meaningful usage (an unused pool gains nothing
+        from rolling over early, so it's never flagged), with `resets_at`
+        attached. A pool that trips both conditions reports only "thin" --
+        it's the more directly actionable of the two numbers, and one
+        reason per pool keeps the output terse."""
     buffer = _uc_cost("CLAUDE_USAGE_UC_BUFFER", 3)
     pools = []
     if "five_hour_pct" in cache:
-        pools.append(("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"),
-                      _uc_cost("CLAUDE_USAGE_UC_COST_5H", 20)))
+        cost = ultracode_observed_cost("5h")
+        if cost is None:
+            cost = _uc_cost("CLAUDE_USAGE_UC_COST_5H", 20)
+        pools.append(("5h", cache["five_hour_pct"], cache.get("five_hour_resets_at"), cost))
     if "seven_day_pct" in cache:
-        pools.append(("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"),
-                      _uc_cost("CLAUDE_USAGE_UC_COST_WEEK", 6)))
+        cost = ultracode_observed_cost("week")
+        if cost is None:
+            cost = _uc_cost("CLAUDE_USAGE_UC_COST_WEEK", 6)
+        pools.append(("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"), cost))
     tracked = cache.get("fable_tracked_model")
     if tracked and "fable_pct" in cache:
         # A slightly-stale tracked % beats ignoring the pool entirely, same
         # trade the watcher's threshold checks already make.
-        pools.append((tracked, cache["fable_pct"], cache.get("fable_resets_at"),
-                      _uc_cost("CLAUDE_USAGE_UC_COST_TRACKED", 8)))
+        cost = ultracode_observed_cost(tracked)
+        if cost is None:
+            cost = _uc_cost("CLAUDE_USAGE_UC_COST_TRACKED", 8)
+        pools.append((tracked, cache["fable_pct"], cache.get("fable_resets_at"), cost))
     if not pools:
         return None
 
@@ -563,8 +687,51 @@ def ultracode_readiness(now, cache):
             elif until is None or resets_at > until:
                 until = resets_at
     if not blockers:
-        return {"verdict": "ok", "blockers": [], "until": None}
+        margin = _uc_cost("CLAUDE_USAGE_UC_MARGIN", 10)
+        reset_soon_s = _uc_cost("CLAUDE_USAGE_UC_RESET_SOON", 600)
+        reset_soon_pct = _uc_cost("CLAUDE_USAGE_UC_RESET_SOON_PCT", 15)
+        margin_notes = []
+        for label, pct, resets_at, cost in pools:
+            if resets_at is not None and (resets_at - now.timestamp()) <= 0:
+                continue  # rolled over server-side; not a signal
+            headroom_after = (100 - pct) - cost
+            if headroom_after < margin:
+                margin_notes.append({"pool": label, "reason": "thin",
+                                      "headroom_after": headroom_after})
+            elif resets_at is not None:
+                secs_left = resets_at - now.timestamp()
+                if 0 < secs_left <= reset_soon_s and pct >= reset_soon_pct:
+                    margin_notes.append({"pool": label, "reason": "reset_soon",
+                                          "resets_at": resets_at})
+        return {"verdict": "ok", "blockers": [], "until": None,
+                "marginal": bool(margin_notes), "margin_notes": margin_notes}
     return {"verdict": "wait", "blockers": blockers, "until": until if until_known else None}
+
+
+def _uc_margin_suffix(margin_notes, now):
+    """Terse tag list for statusline-style renders, e.g. '5h thin, week in
+    8m'. Empty string when margin_notes is empty."""
+    parts = []
+    for note in margin_notes:
+        if note["reason"] == "thin":
+            parts.append(f"{note['pool']} thin")
+        else:  # "reset_soon"
+            delta = fmt_delta(note["resets_at"], now)
+            parts.append(f"{note['pool']} in {delta}" if delta else f"{note['pool']} thin")
+    return ", ".join(parts)
+
+
+def _uc_margin_context_clause(margin_notes, now):
+    """Fuller clause for the SessionStart hook sentence, e.g.
+    'week only ~6pts left after; 5h resets in 8m anyway'."""
+    parts = []
+    for note in margin_notes:
+        if note["reason"] == "thin":
+            parts.append(f"{note['pool']} only ~{round(note['headroom_after'])}pts left after")
+        else:  # "reset_soon"
+            delta = fmt_delta(note["resets_at"], now)
+            parts.append(f"{note['pool']} resets in {delta} anyway" if delta else f"{note['pool']} margin thin")
+    return "; ".join(parts)
 
 
 def fmt_ultracode(state, readiness, now):
@@ -585,7 +752,8 @@ def fmt_ultracode(state, readiness, now):
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
-        return "uc: ok"
+        suffix = _uc_margin_suffix(readiness.get("margin_notes") or [], now)
+        return "uc: ok" + (f" ({suffix})" if suffix else "")
     who = "+".join(readiness["blockers"])
     delta = fmt_delta(readiness["until"], now)
     return f"uc: wait {delta} ({who})" if delta else f"uc: wait ({who})"
@@ -623,7 +791,9 @@ def fmt_ultracode_styled(state, readiness, now):
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
-        return "\033[2muc ok\033[0m"
+        suffix = _uc_margin_suffix(readiness.get("margin_notes") or [], now)
+        text = "uc ok" + (f" ({suffix})" if suffix else "")
+        return f"\033[2m{text}\033[0m"
     who = "+".join(readiness["blockers"])
     delta = fmt_delta(readiness["until"], now)
     body = f"uc wait {delta} ({who})" if delta else f"uc wait ({who})"
@@ -663,9 +833,17 @@ def ultracode_context(state, readiness, now):
     if not readiness:
         return None
     if readiness["verdict"] == "ok":
+        if readiness.get("marginal"):
+            clause = _uc_margin_context_clause(readiness["margin_notes"], now)
+            base = (f"ultracode budget: ok, but thin: {clause}. Weigh whether this run "
+                     "is worth it now vs waiting -- gauge can't see task size, use judgment too.")
+        else:
+            base = (
+                "ultracode budget: ok (one typical multi-agent Workflow run fits "
+                "in every pool's remaining quota)."
+            )
         line = (
-            "ultracode budget: ok (one typical multi-agent Workflow run fits "
-            "in every pool's remaining quota). Whenever this session launches "
+            f"{base} Whenever this session launches "
             "a Workflow run for ANY reason (ultracode keyword, session "
             f"toggle, or explicit ask), run `{mark} on --reason '<short "
             f"task>'` first and `{mark} off` when it finishes -- that's what "

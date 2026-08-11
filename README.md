@@ -305,11 +305,14 @@ segment that answers the two questions that matter about them at a glance:
   that dies mid-run can never leave the bar claiming a live run forever.
 - **`uc: ok`** / **`uc: wait 2h 59m (week)`** — no run live; instead,
   whether one *typical* run currently fits in every pool's remaining quota,
-  and if not, which pool blocks and when that clears. Judged against rough,
-  env-tunable per-pool cost estimates (see [Configuration](#configuration)) —
-  deliberately coarse, meant to separate "plenty of room" from "about to
-  cap", not to model your exact workflow. Tune the knobs against your own
-  observed burns.
+  and if not, which pool blocks and when that clears. Judged per pool
+  against the real cost your own runs have actually measured, once there's
+  enough history to trust (see **Real observed cost**, below); until then,
+  against rough env-tunable per-pool defaults (see
+  [Configuration](#configuration)) — deliberately coarse, meant to separate
+  "plenty of room" from "about to cap", not to model your exact workflow.
+- **`uc: ok (week thin)`** / **`uc: ok (5h in 8m)`** — still fits, but
+  worth a second look: see **"Not worth it" signal**, below.
 
 With the combined two-line statusline (`statusline.py`), the indicator
 renders at the end of the **workload line**, next to the swap marker — an
@@ -321,6 +324,47 @@ instead (the wrapper suppresses that one via `--no-uc-segment` so it never
 shows twice).
 
 ![the workload line's uc indicator in its three states: dim "uc ok" when a run fits, dim "uc wait 2h 46m (week)" naming the blocking pool, and a live run rendered as "⚡ultracode ON 12m" in the magenta→purple gradient, shimmering across renders](docs/ultracode-demo.gif)
+
+### Real observed cost
+
+`ultracode-mark.py on` snapshots every pool's % and reset time from the
+live cache the moment a run starts; `off` re-reads the cache and records
+how many points each pool actually moved, appending one entry to a rolling
+history file (`~/.claude/scripts/ultracode-history.json`, last 20 runs) —
+skipping any pool whose window rolled over mid-run, since the delta would
+then reflect the reset, not the run. Once at least 3 clean samples exist
+for a pool, the readiness verdict uses the *median* of the most recent
+ones (a median resists a single outlier run swinging the estimate) instead
+of the static `CLAUDE_USAGE_UC_COST_*` default — so the gauge gets more
+accurate the more runs get properly bracketed with `on`/`off`, and quietly
+degrades back to the static default whenever history is thin or a pool's
+tracked model changes underneath it. Nothing to configure — this just
+happens automatically as long as runs are marked.
+
+### "Not worth it" signal
+
+A run that technically fits can still be a bad idea to start right now —
+the gauge flags that as `marginal` (never a different verdict; still fully
+"ok," just with a caveat) for two reasons:
+
+- **thin** — the headroom that would remain in a pool *after* one more
+  typical run falls under `CLAUDE_USAGE_UC_MARGIN` (default 10pts).
+- **reset_soon** — a pool that already has meaningful usage on it
+  (`CLAUDE_USAGE_UC_RESET_SOON_PCT`, default 15pts) resets within
+  `CLAUDE_USAGE_UC_RESET_SOON` (default 600s) — an unused pool gains
+  nothing from rolling over early, so it's never flagged for that alone. A
+  pool that trips both reasons only reports "thin," the more directly
+  actionable of the two.
+
+It shows up as a parenthetical on the statusline (`uc: ok (week thin)`,
+`uc: ok (5h in 8m)`), the same dim, non-escalating styling on the workload
+line, and one extra sentence in the `SessionStart` hook context — the only
+place the gauge nudges toward using judgment, since it has no visibility
+into how big the task actually is:
+
+> ultracode budget: ok, but thin: week only ~6pts left after. Weigh
+> whether this run is worth it now vs waiting -- gauge can't see task
+> size, use judgment too.
 
 The `SessionStart` hook injects the same verdict into each new session's
 context, so the session itself knows whether a run is affordable before it
@@ -362,6 +406,9 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_UC_BUFFER` | `3` | Reserve points kept free on every pool on top of the assumed cost |
 | `CLAUDE_USAGE_UC_TTL_HOURS` | `4` | Hours before an ultracode active-marker expires on its own |
 | `CLAUDE_USAGE_UC_AUTO` | unset (off) | Standing consent for sessions to self-start Workflow runs — see the ultracode gauge above |
+| `CLAUDE_USAGE_UC_MARGIN` | `10` | Points. Below this much post-run headroom, a pool is flagged `"thin"` — see ["Not worth it" signal](#not-worth-it-signal) |
+| `CLAUDE_USAGE_UC_RESET_SOON` | `600` | Seconds. A pool resetting this soon or sooner is a `"reset_soon"` candidate — see above |
+| `CLAUDE_USAGE_UC_RESET_SOON_PCT` | `15` | Points already used. `"reset_soon"` only fires above this much usage on the pool — see above |
 
 ## The PENDING.md convention
 

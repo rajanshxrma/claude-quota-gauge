@@ -4,6 +4,39 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-08-10
+
+### Added
+- **The ultracode readiness verdict now weighs real observed per-run cost
+  over the static per-pool default whenever enough history exists.**
+  `ultracode-mark.py on` snapshots each pool's %/`resets_at` from the live
+  cache at run start; `off` diffs against the cache again at run end and
+  appends the measured delta to a new rolling history file
+  (`ultracode-history.json`, capped at the most recent 20 runs) -- skipping
+  any pool whose window rolled over mid-run, since the delta would then
+  reflect the reset, not the run. `ultracode_readiness()` takes the median
+  of the last few real deltas per pool (`ultracode_observed_cost()`,
+  requires at least 3 samples) when one exists, falling back to the
+  existing `CLAUDE_USAGE_UC_COST_*` env defaults exactly as before
+  otherwise -- a fresh install or thin history behaves identically to
+  0.18.1, and the estimate only gets more accurate as more runs get
+  properly bracketed with on/off.
+- **A `marginal` signal on the `"ok"` verdict flags a run that technically
+  fits but leaves little to spare.** Additive to `"ok"`, never a new
+  verdict value -- every existing `readiness["verdict"] == "ok"` check
+  keeps working unchanged. Two triggers, one reason reported per pool:
+  "thin" when the headroom that would remain after one more run falls
+  under `CLAUDE_USAGE_UC_MARGIN` (default 10pts), and "reset_soon" when a
+  pool that already has meaningful usage on it
+  (`CLAUDE_USAGE_UC_RESET_SOON_PCT`, default 15pts) resets within
+  `CLAUDE_USAGE_UC_RESET_SOON` (default 600s) -- an unused pool gains
+  nothing from rolling over early, so it's never flagged just for that.
+  Shows up as a parenthetical on the statusline (`uc: ok (week thin)`),
+  the same dim styling on the workload line (no color escalation), and one
+  extra sentence in the SessionStart hook context nudging toward weighing
+  whether the run is worth it now vs waiting -- the gauge still can't see
+  task size, so that part stays a judgment call, not a computed number.
+
 ## [0.18.1] - 2026-08-09
 
 ### Changed

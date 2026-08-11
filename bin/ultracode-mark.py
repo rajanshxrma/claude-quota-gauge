@@ -30,10 +30,92 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from usage_common import (  # noqa: E402
-    UC_STATE_PATH, load_env_file, ultracode_readiness, ultracode_state,
+    UC_HISTORY_PATH, UC_STATE_PATH, load_env_file, ultracode_readiness, ultracode_state,
 )
 
 LIVE_CACHE_PATH = os.path.expanduser("~/.claude/scripts/usage-live.json")
+
+# Max history rows kept in UC_HISTORY_PATH -- a rolling window, not a
+# permanent log. ultracode_observed_cost() in usage_common.py only ever
+# looks at the last handful (default up to 10) of these anyway, so keeping
+# more than this is pure unused disk, not extra signal.
+UC_HISTORY_MAX_ROWS = 20
+
+
+def _read_cache():
+    if not os.path.exists(LIVE_CACHE_PATH):
+        return {}
+    try:
+        with open(LIVE_CACHE_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _record_observed_cost(state, now):
+    """Appends one real-cost sample to UC_HISTORY_PATH for the run that's
+    ending, so ultracode_observed_cost() in usage_common.py has real data to
+    median over instead of always falling back to the static per-pool
+    default. Best-effort in every direction -- a missing/partial on-time
+    snapshot, a missing/corrupt live cache, or a missing/corrupt history
+    file all degrade gracefully (that pool's delta, or the whole record,
+    just doesn't get recorded) rather than ever failing the `off` action
+    that calls this. Same defensive posture as the rest of this codebase:
+    an `off` that fails to flip the marker because of a bookkeeping hiccup
+    would be far worse than an `off` that silently skips one history row."""
+    try:
+        cache = _read_cache()
+
+        def delta_for(pct_key, resets_key, snap_pct_key, snap_resets_key):
+            snap_pct = state.get(snap_pct_key)
+            snap_resets = state.get(snap_resets_key)
+            now_pct = cache.get(pct_key)
+            now_resets = cache.get(resets_key)
+            if snap_pct is None or now_pct is None:
+                return None
+            if snap_resets != now_resets:
+                # A reset happened mid-run -- the raw delta would reflect the
+                # rollover, not what the run actually cost. Unreliable, skip
+                # just this pool rather than the whole record.
+                return None
+            return max(0.0, now_pct - snap_pct)
+
+        tracked_model = state.get("tracked_model_at_on")
+        record = {
+            "since": state.get("since"),
+            "ended_at": now.isoformat(),
+            "reason": state.get("reason") or "",
+            "five_hour_delta": delta_for(
+                "five_hour_pct", "five_hour_resets_at",
+                "five_hour_pct_at_on", "five_hour_resets_at_at_on",
+            ),
+            "seven_day_delta": delta_for(
+                "seven_day_pct", "seven_day_resets_at",
+                "seven_day_pct_at_on", "seven_day_resets_at_at_on",
+            ),
+            "tracked_delta": delta_for(
+                "fable_pct", "fable_resets_at",
+                "tracked_pct_at_on", "tracked_resets_at_at_on",
+            ) if tracked_model else None,
+            "tracked_model": tracked_model,
+        }
+
+        history = []
+        if os.path.exists(UC_HISTORY_PATH):
+            try:
+                with open(UC_HISTORY_PATH) as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    history = loaded
+            except Exception:
+                history = []
+        history.append(record)
+        history = history[-UC_HISTORY_MAX_ROWS:]
+        os.makedirs(os.path.dirname(UC_HISTORY_PATH), exist_ok=True)
+        with open(UC_HISTORY_PATH, "w") as f:
+            json.dump(history, f)
+    except Exception:
+        pass
 
 
 def main():
@@ -59,6 +141,14 @@ def main():
     now = datetime.now(timezone.utc)
 
     if args.action == "on":
+        # Snapshot every pool present in the live cache at the moment the
+        # run starts -- `off` diffs against this to record the run's real
+        # observed cost (see _record_observed_cost() and
+        # ultracode_observed_cost() in usage_common.py). Missing/partial
+        # cache just means those keys come back None; that pool's delta
+        # simply won't be recordable at `off` time, same defensive style as
+        # everywhere else in this file.
+        cache = _read_cache()
         os.makedirs(os.path.dirname(UC_STATE_PATH), exist_ok=True)
         with open(UC_STATE_PATH, "w") as f:
             json.dump({
@@ -66,6 +156,13 @@ def main():
                 "since": now.isoformat(),
                 "reason": args.reason,
                 "session_id": args.session_id,
+                "five_hour_pct_at_on": cache.get("five_hour_pct"),
+                "five_hour_resets_at_at_on": cache.get("five_hour_resets_at"),
+                "seven_day_pct_at_on": cache.get("seven_day_pct"),
+                "seven_day_resets_at_at_on": cache.get("seven_day_resets_at"),
+                "tracked_model_at_on": cache.get("fable_tracked_model"),
+                "tracked_pct_at_on": cache.get("fable_pct"),
+                "tracked_resets_at_at_on": cache.get("fable_resets_at"),
             }, f)
         print(f"ultracode marked ON{' -- ' + args.reason if args.reason else ''}")
     elif args.action == "off":
@@ -89,6 +186,10 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
+        # Only on a successful, non-refused off: record this run's real
+        # observed cost before the on-time snapshot fields are (implicitly)
+        # superseded by the next `on`.
+        _record_observed_cost(state, now)
         state["active"] = False
         state["ended_at"] = now.isoformat()
         with open(UC_STATE_PATH, "w") as f:
