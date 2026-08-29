@@ -41,7 +41,7 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_window, load_env_file, version_lt, fable_estimate, fmt_model, fable_stale_elapsed, _cap_max_age, fmt_ultracode, ultracode_readiness, ultracode_state  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, fmt_prompt_cache, load_env_file, version_lt, fable_estimate, fmt_model, fable_stale_elapsed, _cap_max_age, fmt_ultracode, ultracode_readiness, ultracode_state  # noqa: E402
 
 load_env_file()
 
@@ -107,6 +107,11 @@ def main():
             parts.append(fmt_window("week", cache["seven_day_pct"], cache.get("seven_day_resets_at"), now, cached=True))
             data["seven_day"] = {"pct": cache["seven_day_pct"], "resets_at": cache.get("seven_day_resets_at"), "cached": True}
             usage_added = True
+        data["spend_limit"] = None
+        if "spend_limit_pct" in cache:
+            parts.append(fmt_window("spend", cache["spend_limit_pct"], cache.get("spend_limit_resets_at"), now, cached=True))
+            data["spend_limit"] = {"pct": cache["spend_limit_pct"], "resets_at": cache.get("spend_limit_resets_at"), "cached": True}
+            usage_added = True
 
         if not usage_added:
             # Only blame the CLI version when the payload actually confirms
@@ -150,6 +155,25 @@ def main():
             cache["seven_day_pct"] = pct
             cache["seven_day_resets_at"] = resets_at
             data["seven_day"] = {"pct": pct, "resets_at": resets_at, "cached": False}
+
+        # Spend limit (v2.1.251+): only present behind a Claude apps gateway
+        # that sets one, and Claude Code drops the window once its period
+        # resets -- so when rate_limits is present but this key isn't, the
+        # cached copy is cleared too rather than lingering as a stale row.
+        # Its % can legitimately run past 100 once the limit is exceeded;
+        # fmt_window renders that as-is, which is the honest reading.
+        spend = rate_limits.get("spend_limit") or {}
+        data["spend_limit"] = None
+        if "used_percentage" in spend:
+            pct = spend["used_percentage"]
+            resets_at = spend.get("resets_at")
+            parts.append(fmt_window("spend", pct, resets_at, now))
+            cache["spend_limit_pct"] = pct
+            cache["spend_limit_resets_at"] = resets_at
+            data["spend_limit"] = {"pct": pct, "resets_at": resets_at, "cached": False}
+        else:
+            cache.pop("spend_limit_pct", None)
+            cache.pop("spend_limit_resets_at", None)
 
     fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
     if fable:
@@ -234,6 +258,26 @@ def main():
         }
     else:
         data["tracked_model"] = None
+
+    # Prompt cache (v2.1.251+): per-session, so it's rendered straight from
+    # this render's payload and deliberately NOT written to the shared
+    # usage-live.json -- that cache is one file for every open session, and
+    # a warm/cold flag from another terminal would be actively misleading.
+    pc = payload.get("prompt_cache")
+    pc_part = fmt_prompt_cache(pc, now)
+    if pc_part:
+        parts.append(pc_part)
+    data["prompt_cache"] = None
+    if isinstance(pc, dict) and pc.get("caching_observed"):
+        data["prompt_cache"] = {
+            "warm": bool(pc.get("warm")),
+            "hit_ratio": pc.get("hit_ratio"),
+            "ttl": pc.get("ttl"),
+            "expires_at": pc.get("expires_at"),
+            "requests": pc.get("requests"),
+            "misses": pc.get("misses"),
+            "recache_tokens_if_cold": pc.get("recache_tokens_if_cold"),
+        }
 
     # After the fable block so the readiness check sees this render's
     # freshest numbers for all three pools, not last render's.

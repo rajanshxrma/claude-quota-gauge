@@ -15,7 +15,7 @@ import json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import fable_mark_used  # noqa: E402
+from usage_common import fable_mark_used, fable_mark_session_used  # noqa: E402
 
 
 def main():
@@ -28,8 +28,13 @@ def main():
     if tool_input.get("model") != "fable":
         return
 
+    now = datetime.now(timezone.utc)
     try:
-        fable_mark_used(datetime.now(timezone.utc))
+        fable_mark_used(now)
+    except Exception:
+        pass
+    try:
+        fable_mark_session_used(payload.get("session_id"), now)
     except Exception:
         pass
 

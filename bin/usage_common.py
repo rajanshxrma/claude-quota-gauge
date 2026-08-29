@@ -301,6 +301,58 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
 FABLE_STALE_STATE_PATH = os.path.expanduser("~/.claude/scripts/fable-stale-state.json")
 LIVE_CACHE_PATH = os.path.expanduser("~/.claude/scripts/usage-live.json")
 FABLE_FORCE_RECAL_PATH = os.path.expanduser("~/.claude/scripts/fable-force-recal.json")
+FABLE_SESSION_USAGE_PATH = os.path.expanduser("~/.claude/scripts/fable-session-usage.json")
+
+
+def fable_mark_session_used(session_id, now):
+    """Records that THIS session has actually dispatched a Fable agent at
+    least once. Used to gate the mid-session staleness nudge below so it
+    only fires in sessions that are actually working with Fable -- found
+    live 2026-08-24: an 11-day maxwell-training monitoring session that
+    never once dispatched Fable was repeatedly interrupted by "Fable went
+    stale, recalibrate" nudges purely on the blind time/drift schedule,
+    forcing a full browser round-trip for a number nothing in that session
+    needed. The event-driven path (fable_force_recal_pending, tied to a
+    real dispatch) already does the right thing; this fixes the *other*
+    path (fable_stale_to_announce) to respect the same principle."""
+    if not session_id:
+        return
+    usage = {}
+    if os.path.exists(FABLE_SESSION_USAGE_PATH):
+        try:
+            with open(FABLE_SESSION_USAGE_PATH) as f:
+                usage = json.load(f)
+        except Exception:
+            usage = {}
+    usage[session_id] = now.isoformat()
+    # Prune old sessions same as the stale-state file, so this doesn't grow
+    # forever.
+    cutoff = now - THEME_STATE_MAX_AGE
+    usage = {
+        sid: ts for sid, ts in usage.items()
+        if _safe_parse_iso(ts, now) > cutoff
+    }
+    os.makedirs(os.path.dirname(FABLE_SESSION_USAGE_PATH), exist_ok=True)
+    with open(FABLE_SESSION_USAGE_PATH, "w") as f:
+        json.dump(usage, f)
+
+
+def fable_session_has_used(session_id):
+    if not session_id or not os.path.exists(FABLE_SESSION_USAGE_PATH):
+        return False
+    try:
+        with open(FABLE_SESSION_USAGE_PATH) as f:
+            usage = json.load(f)
+        return session_id in usage
+    except Exception:
+        return False
+
+
+def _safe_parse_iso(ts, fallback_now):
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return fallback_now
 
 
 def fable_mark_used(now, context="agent-dispatch"):
@@ -377,6 +429,13 @@ def fable_stale_to_announce(session_id, now):
     cleanly rather than staying suppressed. Returns the tracked model name
     (e.g. "fable") when there's something new to announce, else None."""
     if not session_id or not os.path.exists(LIVE_CACHE_PATH):
+        return None
+    if not fable_session_has_used(session_id):
+        # This session has never dispatched Fable -- the blind time/drift
+        # schedule isn't a reason to nag it mid-session. If it later does
+        # dispatch Fable, fable_mark_session_used() flips this on and the
+        # event-driven path (fable_force_recal_pending) already forces an
+        # immediate recalibrate right after that dispatch anyway.
         return None
     try:
         with open(LIVE_CACHE_PATH) as f:
@@ -1087,6 +1146,51 @@ def fmt_delta(epoch_target, now):
         d, h = divmod(h, 24)
         return f"{d}d {h}h"
     return f"{h}h {m}m"
+
+
+def fmt_tokens(n):
+    """Compact token count for the bar: 45000 -> '45k', 1250000 -> '1.2M'."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return None
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}k"
+    return f"{n:.0f}"
+
+
+def fmt_prompt_cache(pc, now):
+    """Formats the session's prompt-cache state from Claude Code's
+    `prompt_cache` payload object (v2.1.251+), e.g. 'cache: warm 91% (42m
+    left)' or 'cache: cold (~45k to rewarm)'. Returns None when the field is
+    absent (older CLI, or before the first API response) or when caching was
+    never observed this session (provider/gateway not reporting it) -- a
+    segment that can only ever say "off" is noise, not signal.
+
+    Why it earns a slot on the bar: the 5h/weekly numbers say how much pool
+    is left, but not how expensive the *next* prompt is. A cold cache means
+    the whole prefix gets re-written on the next turn (`recache_tokens_if_
+    cold`), which is real quota on a long session -- so "is it still warm,
+    and how long for" is the one thing worth knowing before stepping away
+    from a session and coming back to it later."""
+    if not isinstance(pc, dict) or not pc.get("caching_observed"):
+        return None
+    if pc.get("warm"):
+        bits = ["warm"]
+        ratio = pc.get("hit_ratio")
+        if isinstance(ratio, (int, float)):
+            bits.append(f"{ratio * 100:.0f}%")
+        text = "cache: " + " ".join(bits)
+        left = fmt_delta(pc.get("expires_at"), now)
+        if left:
+            text += f" ({left} left)"
+        return text
+    tok = fmt_tokens(pc.get("recache_tokens_if_cold"))
+    if tok and float(pc.get("recache_tokens_if_cold") or 0) > 0:
+        return f"cache: cold (~{tok} to rewarm)"
+    return "cache: cold"
 
 
 def fmt_window(label, pct, resets_at, now, cached=False, note=None):

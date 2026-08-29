@@ -4,6 +4,61 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] - 2026-08-29
+
+Built against Claude Code 2.1.251, which added model-switch hook events, a
+`prompt_cache` status-line object, and a `rate_limits.spend_limit` window.
+Everything below degrades to a no-op on an older CLI (the events never
+fire, the fields are simply absent).
+
+### Added
+- **Quota-aware model switches** (`bin/model-switch-hook.py`, wired to both
+  `PreModelSwitch` and `PostModelSwitch` by `install.sh`). Before a switch
+  applies, the hook annotates it with the real 5h/weekly % from the live
+  cache, plus the tracked model's weekly estimate when the switch lands on
+  it -- the numbers are in front of Claude at the exact moment the decision
+  to move onto a scarcer pool is made. New opt-in
+  `CLAUDE_USAGE_SWITCH_BLOCK_PCT` denies a switch onto the tracked model
+  once its estimate is at or past that % (default 0 = annotate only).
+- **Interactive tracked-model sessions now trigger recalibration.** The
+  `PostModelSwitch` half marks the tracked model as freshly used whenever a
+  session moves onto or off it, the same way an Agent dispatch with
+  `model=<tracked>` already did. This closes the one gap the dispatch
+  trigger couldn't see: a session running *on* Fable directly (`/model
+  fable`, or a settings pin restored on resume) never dispatches an Agent
+  for it, so its usage rode entirely on the blind max-age/drift backstop.
+- **`cache:` segment on the bar** from the new per-session `prompt_cache`
+  object: `cache: warm 91% (42m left)` while the cached prefix is inside
+  its TTL, `cache: cold (~45k to rewarm)` once it isn't -- the one number
+  that says how expensive the *next* prompt is, not just how much pool is
+  left. Silent when the field is absent or caching was never observed.
+  Deliberately not written to `usage-live.json` (that cache is shared
+  across every open session; a warm/cold flag from another terminal would
+  be misleading). `--json` carries it as `prompt_cache`.
+- **`spend:` segment** for `rate_limits.spend_limit` (Claude apps gateway
+  users with a spend limit): rendered, cached, and surfaced by the
+  SessionStart hook exactly like the 5h/weekly windows, including the
+  cached-fallback path. Cleared from the cache the moment `rate_limits`
+  arrives without it, so it can't linger stale after its period resets.
+  `--json` carries it as `spend_limit`.
+- **Resume cost in the SessionStart context.** On a resumed session, the
+  hook now reads the new `cache_invalidation_reason` /
+  `re_cache_cost_tokens` / `re_cache_cost_usd` fields and adds one clause
+  ("resumed with a cold prompt cache (model_switch): ~125k tokens re-cache
+  on the next turn") -- silent on a fresh start or when the cache survived.
+
+### Fixed
+- **Ported two fixes that had only ever been applied to a local install
+  (2026-08-24), never shipped here:** (1) the mid-session "tracked model
+  went stale, recalibrate" nudge now fires only in sessions that have
+  actually used the tracked model (`fable_mark_session_used` /
+  `fable_session_has_used`), instead of interrupting every long-running
+  session on the blind time/drift schedule; (2) `usage-calibrate-fable.py`
+  no longer blends a carried-forward prior cap from an *earlier* window into
+  a fresh calibration -- it now checks the cap was actually derived inside
+  the current window, not merely labeled with it (a 430-cap carried forward
+  got blended into a ~17 raw cap and made a real 14% report as 1.1%).
+
 ## [0.19.0] - 2026-08-10
 
 ### Added

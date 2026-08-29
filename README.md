@@ -409,6 +409,7 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_UC_MARGIN` | `10` | Points. Below this much post-run headroom, a pool is flagged `"thin"` — see ["Not worth it" signal](#not-worth-it-signal) |
 | `CLAUDE_USAGE_UC_RESET_SOON` | `600` | Seconds. A pool resetting this soon or sooner is a `"reset_soon"` candidate — see above |
 | `CLAUDE_USAGE_UC_RESET_SOON_PCT` | `15` | Points already used. `"reset_soon"` only fires above this much usage on the pool — see above |
+| `CLAUDE_USAGE_SWITCH_BLOCK_PCT` | `0` (annotate only) | Deny a `/model` switch onto the tracked model once its weekly estimate is at or past this % — see [Model-switch guard](#model-switch-guard-and-prompt-cache) |
 
 ## The PENDING.md convention
 
@@ -430,6 +431,50 @@ Run `/pending <what's parked>` to add one from inside a Claude Code session —
 it finds the right file (same resolution order as above), creates it from
 the template if it doesn't exist yet, and inserts your item as a new
 newest-on-top `## ` heading without touching anything already there.
+
+## Model-switch guard and prompt cache
+
+Three Claude Code 2.1.251 additions, each folded in where it belongs. All of
+them are no-ops on an older CLI — the hook events never fire and the payload
+fields are simply absent.
+
+**Model switches are annotated with live usage.** `install.sh` wires
+`bin/model-switch-hook.py` to the `PreModelSwitch` and `PostModelSwitch`
+events. Before a `/model` switch applies, the hook puts the real 5h/weekly
+% (and the tracked model's weekly estimate, when the switch lands on that
+model) into the transcript as a system message — so the numbers are in
+front of Claude at the exact moment it's deciding to move onto a scarcer
+pool, not discovered a few turns later from the bar. Set
+`CLAUDE_USAGE_SWITCH_BLOCK_PCT=95` (any %) to go further and *deny* a switch
+onto the tracked model once its estimate is at or past that — a pool that's
+already spent just converts the next prompt into a rate-limit error. Off by
+default.
+
+**A session that runs on the tracked model directly now recalibrates.** The
+`PostModelSwitch` half marks the tracked model as freshly used whenever a
+session moves onto or off it — the same trigger an Agent dispatch with
+`model=<tracked>` already had. That closes the gap the per-model tracking
+section below warns about from the other side: a session sitting *on*
+Fable (`/model fable`, or a settings pin restored on resume) never
+dispatches an Agent for it, so before 0.20.0 its whole usage rode on the
+blind max-age/drift backstop.
+
+**The bar shows whether the prompt cache is warm.** From the new
+per-session `prompt_cache` object: `cache: warm 91% (42m left)` while the
+cached prefix is inside its TTL, `cache: cold (~45k to rewarm)` once it
+isn't. The 5h/weekly numbers say how much pool is left; this says how
+expensive the *next* prompt is — the one thing worth a glance before
+stepping away from a long session and coming back to it. It's per-session,
+so it's rendered straight from the payload and never written to the shared
+`usage-live.json`. On a resumed session the `SessionStart` hook also names
+the re-cache cost Claude Code reports (`cache_invalidation_reason`,
+`re_cache_cost_tokens`) in one clause, and stays silent when the cache
+survived the resume.
+
+Behind a Claude apps gateway with a spend limit, `rate_limits.spend_limit`
+renders as a third window (`spend: 63% (resets 5d 3h)`) with the same
+caching, fallback, and SessionStart treatment as the 5h/weekly ones; its %
+can run past 100 once the limit is exceeded and is shown as-is.
 
 ## Optional: per-model weekly tracking (e.g. Fable)
 

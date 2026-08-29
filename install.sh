@@ -72,10 +72,11 @@ if [[ "$REPLY" =~ ^[Yy] ]]; then
     "python3 $SCRIPTS_DIR/fable-stale-prompt-hook.py" \
     "python3 $SCRIPTS_DIR/fable-agent-posttooluse-hook.py" \
     "python3 $SCRIPTS_DIR/title-collision-prompt-hook.py" \
-    "python3 $SCRIPTS_DIR/update-check-session-hook.py" <<'PYEOF'
+    "python3 $SCRIPTS_DIR/update-check-session-hook.py" \
+    "python3 $SCRIPTS_DIR/model-switch-hook.py" <<'PYEOF'
 import json, os, sys
 
-settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command, fable_agent_hook_command, title_collision_hook_command, update_check_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
+settings_path, statusline_command, hook_command, prompt_hook_command, fable_prompt_hook_command, fable_agent_hook_command, title_collision_hook_command, update_check_hook_command, model_switch_hook_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8], sys.argv[9]
 
 settings = {}
 if os.path.exists(settings_path):
@@ -195,13 +196,33 @@ else:
     print("  (no-ops unless an Agent call explicitly dispatches model=\"fable\" -- ties")
     print("  recalibration to actual tracked-model usage instead of a blind schedule)")
 
+# One script serves both model-switch events (Claude Code >= 2.1.251; an
+# older CLI simply never fires them, so wiring is harmless there). Pre is
+# synchronous because it may annotate or -- opt-in -- deny the switch; Post
+# is async and only marks the tracked model as used for recalibration.
+for event, extra in (("PreModelSwitch", {"timeout": 10}), ("PostModelSwitch", {"timeout": 5, "async": True})):
+    groups = hooks.setdefault(event, [])
+    present = any(
+        h.get("command") and normalize(h["command"]) == normalize(model_switch_hook_command)
+        for group in groups
+        for h in group.get("hooks", [])
+    )
+    if present:
+        print(f"  {event} hook already present, left settings.json unchanged")
+    else:
+        groups.append({"hooks": [dict({"type": "command", "command": model_switch_hook_command}, **extra)]})
+        print(f"  added {event} hook: {model_switch_hook_command}")
+print("  (model-switch hooks annotate every switch with live usage; a switch onto the")
+print("  tracked model also triggers recalibration. Blocking is off unless")
+print("  CLAUDE_USAGE_SWITCH_BLOCK_PCT is set -- see config/claude-quota-gauge.env.example)")
+
 with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)
 PYEOF
 else
   echo "  skipped. Add these to ~/.claude/settings.json yourself:"
   echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
-  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/update-check-session-hook.py", "timeout": 8 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] }, { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/title-collision-prompt-hook.py", "timeout": 10 } ] } ], "PostToolUse": [ { "matcher": "Agent", "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-agent-posttooluse-hook.py", "timeout": 5, "async": true } ] } ] }'
+  echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/update-check-session-hook.py", "timeout": 8 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] }, { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/title-collision-prompt-hook.py", "timeout": 10 } ] } ], "PostToolUse": [ { "matcher": "Agent", "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-agent-posttooluse-hook.py", "timeout": 5, "async": true } ] } ], "PreModelSwitch": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/model-switch-hook.py", "timeout": 10 } ] } ], "PostModelSwitch": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/model-switch-hook.py", "timeout": 5, "async": true } ] } ] }'
 fi
 
 # --- Optional: pending tracking -------------------------------------------

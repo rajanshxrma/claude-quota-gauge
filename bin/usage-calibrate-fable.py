@@ -132,7 +132,31 @@ def main():
         # to trusting the raw sample once the window rolls over (a new
         # week has nothing prior to blend against).
         raw_cap = tracked_tokens / (pct / 100)
-        if prior_cap and prior_window_start == window_start.isoformat():
+        # Guard against blending in a stale carried-forward cap: the 0%/
+        # zero-tracked-tokens branch below can carry an OLD window's cap
+        # forward while still stamping the CURRENT window_start onto the
+        # file (so window/reset bookkeeping stays current even when the cap
+        # itself couldn't be re-derived that time). That makes
+        # `prior_window_start == window_start` true even though no real
+        # calibration happened in this window -- found live 2026-08-24: a
+        # 430-cap carried forward from the prior week got blended 70% into
+        # a fresh 14%-based ~17 raw_cap, producing an inflated ~220 cap that
+        # then made fable_estimate() (tracked_now/cap*100) under-report 14%
+        # as 1.1%. Fix: only trust prior_cap for blending if it was
+        # *actually derived* inside the current window, not merely labeled
+        # with it -- check prior_cap_derived_at falls in [window_start,
+        # next_reset), not just the window_start string match.
+        prior_cap_valid_for_blend = False
+        if prior_cap and prior_cap_derived_at:
+            try:
+                prior_derived_dt = datetime.fromisoformat(prior_cap_derived_at)
+                prior_cap_valid_for_blend = (
+                    prior_window_start == window_start.isoformat()
+                    and window_start <= prior_derived_dt < next_reset
+                )
+            except Exception:
+                prior_cap_valid_for_blend = False
+        if prior_cap_valid_for_blend:
             cal["cap"] = 0.7 * prior_cap + 0.3 * raw_cap
         else:
             cal["cap"] = raw_cap
