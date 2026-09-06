@@ -67,7 +67,21 @@ def main():
         )
         sys.exit(1)
 
+    now = datetime.now(timezone.utc)
     next_reset = datetime.fromtimestamp(resets_at, tz=timezone.utc)
+    # The cached resets_at is only ever as fresh as the last statusline
+    # render, so it can name a boundary that has already passed -- found live
+    # 2026-09-05: a calibration at 23:07Z anchored to a resets_at of 09:00Z
+    # that same morning, i.e. a window that had already rolled over. Taken at
+    # face value that puts window_start a full week early, so tokens_at_cal
+    # sums an extra week of usage and the cap derived from it comes out
+    # inflated by that same ratio; fable_estimate() then measures the *current*
+    # window's usage against that inflated cap and under-reports badly (a real
+    # 81% read rendered as 18%). Step forward in 7-day increments to the real
+    # upcoming boundary -- the same way fable_estimate() advances a window of
+    # its own when it has no live resets_at to lean on.
+    while now >= next_reset:
+        next_reset += timedelta(days=7)
     window_start = next_reset - timedelta(days=7)
     # The real, verified aggregate weekly % at the moment of this
     # calibration -- the tripwire in fable_estimate() compares this against
@@ -85,7 +99,6 @@ def main():
     )
     tracked_tokens = sum(v for k, v in tokens.items() if TRACK_MODEL.lower() in k.lower())
 
-    now = datetime.now(timezone.utc)
     cal = {
         "calibrated_at": now.isoformat(),
         "tracked_model": TRACK_MODEL,

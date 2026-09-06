@@ -4,6 +4,45 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.20.1] - 2026-09-06
+
+### Fixed
+- **A weekly boundary that has already passed is no longer taken verbatim as
+  the current window's boundary.** `usage-live.json` is one file shared by
+  every open session, but a statusline render is not proof of a fresh
+  payload: Claude Code hands the command whatever `rate_limits` that session
+  last received and re-renders on the refresh interval regardless, so a
+  long-idle session keeps writing a `resets_at` from days ago. Found live
+  (2026-09-06) with two sessions taking turns clobbering each other — one
+  reporting a weekly boundary a full window stale and a 5h boundary 89 hours
+  stale. Both `usage-calibrate-fable.py` and `fable_estimate()` trusted that
+  value outright, which put `window_start` a whole week early. On the
+  derivation side that summed an extra week of usage into `tokens_at_cal` and
+  inflated the derived cap by the same ratio; on the read side it projected
+  against a week-and-a-bit of tokens. A verified 91%-class read came back out
+  of the gauge as 18%, and which session had written the cache last decided
+  which of the two wrong numbers the bar showed. Both sites now advance a
+  past boundary in 7-day steps to the real upcoming one — a no-op whenever
+  the cached `resets_at` is current, which is the normal case.
+- **A render can no longer regress the shared cache to an older window.**
+  `regresses()` in `usage-statusline.py` skips the cache write (per pool) when
+  this render's payload describes a strictly older window than the one already
+  cached, so an idle session's stale numbers stop overwriting an active
+  session's current ones every 60s. Same-window renders are still
+  newest-wins, deliberately not a per-pct high-water mark: a mid-window limit
+  boost can legitimately move a `used_percentage` down.
+- **A calibration whose own `next_reset` predates its own `calibrated_at` now
+  reports `stale`.** That shape is internally impossible — calibration always
+  anchors to the *upcoming* boundary — and marks a file whose cap was derived
+  over the wrong seven days. Reporting stale hands it to the existing
+  auto-recalibration instead of projecting a confidently wrong percentage,
+  which is the whole point of the flag.
+
+### Added
+- `tests/test_stale_window_anchor.py`: nine tests covering all three fixes,
+  including the exact corrupt calibration file found on disk and a
+  hand-computed cap that comes out doubled if `window_start` slips a week.
+
 ## [0.20.0] - 2026-08-29
 
 Built against Claude Code 2.1.251, which added model-switch hook events, a

@@ -179,6 +179,25 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
 
     tracked_model = cal["tracked_model"]
 
+    # A calibration whose own next_reset predates its own calibrated_at is
+    # internally impossible -- calibration always anchors to the *upcoming*
+    # boundary -- and means it was written against a cached resets_at that had
+    # already rolled over (see the roll-forward guard in
+    # usage-calibrate-fable.py for how that happened live on 2026-09-05). Its
+    # window_start, tokens_at_cal and therefore its cap all cover the wrong
+    # week, so projecting the current window against that cap produces a
+    # confidently wrong number rather than an obviously broken one (a real 81%
+    # rendered as 18%). That is precisely what `stale` exists to prevent, so
+    # report it and let the auto-recalibration replace the file instead of
+    # trusting a cap known to be derived from mismatched inputs. Checked here
+    # while next_reset still holds the calibration's own value, before the
+    # advance below overwrites it with the live boundary.
+    try:
+        if datetime.fromisoformat(cal["calibrated_at"]) > next_reset:
+            return {"tracked_model": tracked_model, "stale": True}
+    except Exception:
+        pass
+
     # Advance the window to the real current reset boundary first, before
     # branching on cap state, so every case below reasons about the
     # *current* window rather than a stale one. No browser read needed:
@@ -188,9 +207,22 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     # boundary.
     if current_resets_at is not None:
         next_reset = datetime.fromtimestamp(current_resets_at, tz=timezone.utc)
-    else:
-        while now > next_reset:
-            next_reset += timedelta(days=7)
+    # Roll a boundary that has already passed forward, whatever its source.
+    # rate_limits' own resets_at is ground truth only for as long as the
+    # payload carrying it is current, and it isn't always: the shared cache is
+    # written by every open session's statusline render, and a long-idle
+    # session keeps re-rendering the last payload it ever received (found live
+    # 2026-09-06: a session still reporting a weekly boundary of 09-05T09:00Z
+    # and a 5h boundary of 09-02T14:10Z, both long past). Taken verbatim, a
+    # boundary in the past puts window_start a whole week early and the
+    # projection sums an extra week of tokens -- the same 81%/18% flip-flop
+    # (depending on which session wrote the cache last) that the roll-forward
+    # in usage-calibrate-fable.py exists to stop on the derivation side. A
+    # past boundary is never the *current* window's boundary, so both paths
+    # advance the same way; when the cached resets_at is fresh (the normal
+    # case) this loop is a no-op and nothing changes.
+    while now > next_reset:
+        next_reset += timedelta(days=7)
     window_start = next_reset - timedelta(days=7)
     rolled_over = window_start.isoformat() != cal.get("window_start")
 

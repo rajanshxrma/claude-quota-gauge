@@ -50,6 +50,34 @@ CACHE_PATH = os.path.join(SCRIPTS, "usage-live.json")
 MIN_VERSION = "2.1.80"
 
 
+def regresses(cache, key, resets_at):
+    """True when this render's payload describes a strictly OLDER window than
+    the one already cached for that pool -- in which case it must not
+    overwrite it.
+
+    usage-live.json is one file shared by every open session, but a render is
+    not proof of a fresh payload: Claude Code hands the statusline whatever
+    rate_limits it last received, and re-renders on the refreshInterval
+    regardless, so a long-idle session keeps writing numbers from whenever it
+    last talked to the API. Found live 2026-09-06: a session still reporting a
+    weekly boundary of 09-05T09:00Z (a full window stale) and a 5h boundary of
+    09-02T14:10Z was overwriting a concurrently-active session's current
+    numbers every 60s, and the two took turns clobbering each other. That
+    poisons everything downstream that treats this file as last-known-real --
+    the SessionStart hook, the watcher, and above all usage-calibrate-fable.py,
+    which anchors its whole weekly window (and therefore the derived cap) to
+    the cached seven_day_resets_at.
+
+    Only a strictly older window is skipped. Same-window renders still write,
+    newest-wins, exactly as before -- deliberately not a per-pct high-water
+    mark, since a mid-window limit boost (as on this account through Sept 13)
+    can legitimately move a used_percentage *down*."""
+    cached = cache.get(key)
+    if resets_at is None or cached is None:
+        return False
+    return resets_at < cached
+
+
 def main():
     json_output = "--json" in sys.argv[1:]
     now = datetime.now(timezone.utc)
@@ -144,16 +172,18 @@ def main():
             pct = five_hour["used_percentage"]
             resets_at = five_hour.get("resets_at")
             parts.append(fmt_window("5h", pct, resets_at, now))
-            cache["five_hour_pct"] = pct
-            cache["five_hour_resets_at"] = resets_at
+            if not regresses(cache, "five_hour_resets_at", resets_at):
+                cache["five_hour_pct"] = pct
+                cache["five_hour_resets_at"] = resets_at
             data["five_hour"] = {"pct": pct, "resets_at": resets_at, "cached": False}
 
         if "used_percentage" in seven_day:
             pct = seven_day["used_percentage"]
             resets_at = seven_day.get("resets_at")
             parts.append(fmt_window("week", pct, resets_at, now))
-            cache["seven_day_pct"] = pct
-            cache["seven_day_resets_at"] = resets_at
+            if not regresses(cache, "seven_day_resets_at", resets_at):
+                cache["seven_day_pct"] = pct
+                cache["seven_day_resets_at"] = resets_at
             data["seven_day"] = {"pct": pct, "resets_at": resets_at, "cached": False}
 
         # Spend limit (v2.1.251+): only present behind a Claude apps gateway
@@ -168,8 +198,9 @@ def main():
             pct = spend["used_percentage"]
             resets_at = spend.get("resets_at")
             parts.append(fmt_window("spend", pct, resets_at, now))
-            cache["spend_limit_pct"] = pct
-            cache["spend_limit_resets_at"] = resets_at
+            if not regresses(cache, "spend_limit_resets_at", resets_at):
+                cache["spend_limit_pct"] = pct
+                cache["spend_limit_resets_at"] = resets_at
             data["spend_limit"] = {"pct": pct, "resets_at": resets_at, "cached": False}
         else:
             cache.pop("spend_limit_pct", None)
