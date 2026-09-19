@@ -314,7 +314,16 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
             return {"tracked_model": tracked_model, "stale": True}
 
     tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
-    pct = 100 * tracked_now / cap
+    # Anchor model (2026-09-19, see usage-calibrate-fable.py): inside the
+    # window a calibration happened in, the last real reading IS the level
+    # and the cap only projects growth since. A rolled-over window has no
+    # reading yet, so it projects from zero with the last known slope.
+    if (cal.get("model") == "anchor-v2" and not rolled_over
+            and cal.get("pct") is not None and cal.get("tokens_at_cal") is not None):
+        grown = max(0.0, tracked_now - float(cal["tokens_at_cal"]))
+        pct = float(cal["pct"]) + 100 * grown / cap
+    else:
+        pct = 100 * tracked_now / cap
 
     if pct > PROJECTION_CEILING:
         # The cap itself has likely drifted from reality (Anthropic changed

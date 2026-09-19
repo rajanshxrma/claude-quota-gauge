@@ -115,6 +115,7 @@ def main():
     }
 
     prior_cap, prior_cap_derived_at, prior_window_start = None, None, None
+    prior_pct, prior_tokens = None, None
     if os.path.exists(CAL_PATH):
         try:
             with open(CAL_PATH) as f:
@@ -122,6 +123,8 @@ def main():
             prior_cap = prior.get("cap")
             prior_cap_derived_at = prior.get("cap_derived_at")
             prior_window_start = prior.get("window_start")
+            prior_pct = prior.get("pct")
+            prior_tokens = prior.get("tokens_at_cal")
         except Exception:
             pass
 
@@ -169,11 +172,31 @@ def main():
                 )
             except Exception:
                 prior_cap_valid_for_blend = False
-        if prior_cap_valid_for_blend:
-            cal["cap"] = 0.7 * prior_cap + 0.3 * raw_cap
-        else:
-            cal["cap"] = raw_cap
+        # ANCHOR MODEL (2026-09-19). The old model showed
+        # `tracked_now / cap` and blended each new cap 70/30 with the prior
+        # one, so a fresh, true reading barely moved the display: told 80%,
+        # it kept showing 88-97% (raw cap 744, blended cap 651). His words:
+        # "whenever I talk about the gauge being wrong the new updated
+        # number to be displayed and the calculation model behind our gauge
+        # fixed." A calibration is ground truth, so it now sets the LEVEL
+        # exactly (see usage_common.fable_estimate: pct_at_cal + growth
+        # since), and `cap` only sets the SLOPE -- units of local usage per
+        # 100% -- for what accrues afterwards. The slope prefers two real
+        # readings in this window (what the pool actually charged between
+        # them) over one reading divided by everything since the window
+        # opened, because local accounting misses off-CLI use and weights
+        # cache reads differently from the backend, which is why the raw
+        # cap wanders from read to read. Smoothing the slope is safe now:
+        # the level no longer depends on it.
+        slope = raw_cap
+        if (prior_cap_valid_for_blend and prior_pct is not None and prior_tokens is not None
+                and pct - float(prior_pct) >= 5 and tracked_tokens > float(prior_tokens)):
+            two_point = (tracked_tokens - float(prior_tokens)) / ((pct - float(prior_pct)) / 100)
+            two_point = max(0.5 * raw_cap, min(2.0 * raw_cap, two_point))
+            slope = 0.5 * two_point + 0.5 * raw_cap
+        cal["cap"] = slope
         cal["cap_derived_at"] = now.isoformat()
+        cal["model"] = "anchor-v2"
     else:
         # Can't derive a trustworthy cap here -- either a 0% read (no
         # numerator), or a nonzero real % with zero locally-tracked tokens
@@ -192,6 +215,18 @@ def main():
 
     with open(CAL_PATH, "w") as f:
         json.dump(cal, f, indent=2)
+    # The display reads usage-live.json, which only refreshes on the next
+    # statusline render -- so a correction used to leave the old number on
+    # screen. Write the true reading through now.
+    try:
+        cache["fable_pct"] = pct
+        cache["fable_stale"] = False
+        cache["fable_tracked_model"] = TRACK_MODEL
+        cache["fable_resets_at"] = int(next_reset.timestamp())
+        with open(CACHE_PATH, "w") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
     print(f"Fable calibration written to {CAL_PATH}")
     print(json.dumps(cal, indent=2))
 

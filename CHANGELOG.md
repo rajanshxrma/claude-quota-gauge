@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.21.0] - 2026-09-19
+
+### Fixed
+- **A correction is now adopted exactly.** The tracked-model estimate was
+  `local usage / cap`, and every calibration blended its freshly derived cap
+  70/30 with the previous one, so a true reading barely moved the display:
+  told 80%, the gauge kept showing 88-97%. The estimate is now anchored:
+  `pct at calibration + growth since / cap`. A calibration sets the level
+  exactly; the cap only sets how fast the number grows afterwards.
+- **The slope is measured, not guessed.** When two real readings exist in
+  the same weekly window at least five points apart, the cap comes from what
+  the pool actually charged between them (bounded to 0.5-2x the single-read
+  cap and averaged with it), instead of one reading divided by everything
+  since the window opened. Local accounting misses off-CLI use, which is why
+  the single-read cap wandered from read to read.
+- **The corrected number shows at once.** Calibrating writes the true
+  reading through to `usage-live.json`; before, the old figure stayed on
+  screen until the next statusline render.
+
 ## [0.20.1] - 2026-09-06
 
 ### Fixed
