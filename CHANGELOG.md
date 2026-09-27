@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.22.1] - 2026-09-27
+
+### Changed
+- **The work progress row reads as one calm line.** The bar, the numbers
+  and the note are drawn in a single hue with nothing dimmed, chosen to
+  hold about 4.6:1 against both a white and a black background, so the row
+  is as readable on a light terminal as on a dark one and the bar no longer
+  draws the eye away from the text. The amber `quiet` mark and the green
+  `done` are the only other colours.
+  `CLAUDE_USAGE_PROGRESS_COLOR` picks the look: `calm` (the default),
+  `plain` (the terminal's own text colour), `accent` (0.22.0's warm bar
+  with dimmed details) or a 256-colour number;
+  `CLAUDE_USAGE_PROGRESS_APPEARANCE=light|dark` selects calm's deeper or
+  lighter tone. `NO_COLOR` still removes colour altogether.
+
+### Added
+- `docs/make_progress_demo.py` redraws `docs/progress-demo.gif` from the
+  real renderer, every frame on a light and a dark terminal.
+- 7 tests for the looks (114 in all): calm never dims, the appearance picks
+  the tone, every look draws the same words, `NO_COLOR` wins over all.
+
 ## [0.22.0] - 2026-09-27
 
 ### Added

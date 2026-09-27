@@ -2050,6 +2050,41 @@ def _wp_bar_cells(width, columns):
     return max(8, min(20, columns // 10)) if columns else 12
 
 
+def work_progress_palette(appearance=None):
+    """The row's colours, as SGR codes: (hue, detail, empty, label).
+
+    CLAUDE_USAGE_PROGRESS_COLOR picks the look:
+      calm    (default) one hue for the whole row and nothing dimmed, so
+              the bar, the numbers and the note read as one quiet line on
+              a light terminal and on a dark one alike
+      plain   the terminal's own text colour throughout, the bar included
+      accent  the 0.22.0 look: a warm bar with dimmed details
+      0-255   that 256-colour as the hue, otherwise like calm
+
+    `calm` takes a deeper tone on a light terminal and a lighter one on a
+    dark terminal when the appearance is known ("light"/"dark"), and a
+    middle tone that holds about 4.6:1 against both white and black when
+    it is not."""
+    choice = os.environ.get("CLAUDE_USAGE_PROGRESS_COLOR", "calm").strip().lower()
+    if choice == "plain":
+        return ("", "", "", "1")
+    if choice == "accent":
+        return ("38;5;173", "2", "2", "1")
+    tone = {"light": "62", "dark": "105"}.get(appearance or "", "63")
+    if choice.isdigit() and 0 <= int(choice) <= 255:
+        tone = choice
+    hue = f"38;5;{tone}"
+    return (hue, hue, hue, f"1;{hue}")
+
+
+def work_progress_appearance():
+    """"light" or "dark" from CLAUDE_USAGE_PROGRESS_APPEARANCE, else None
+    (the middle tone). Never shells out: a status line render must stay
+    cheap, and a terminal's own profile can differ from the system's."""
+    value = os.environ.get("CLAUDE_USAGE_PROGRESS_APPEARANCE", "").strip().lower()
+    return value if value in ("light", "dark") else None
+
+
 def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=None):
     """One status-line row for a bar, e.g.
     'release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~40m left · note'
@@ -2062,36 +2097,39 @@ def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=No
         columns = _live_columns()
 
     def paint(code, text):
-        return f"\033[{code}m{text}\033[0m" if color and text else text
+        return f"\033[{code}m{text}\033[0m" if color and code and text else text
 
-    sep, ell = (" | ", "...") if ascii_only else (" · ", "…")
+    hue, detail, empty, label_code = work_progress_palette(work_progress_appearance())
+    raw_sep, ell = (" | ", "...") if ascii_only else (" · ", "…")
+    sep = paint(detail, raw_sep)
     cells = _wp_bar_cells(width, columns)
     frac = view["done"] / view["total"]
-    fill = "32" if view["finished"] else "38;5;173"
+    fill = "32" if view["finished"] else hue
     if ascii_only:
         filled = int(frac * cells + 1e-9)
-        bar = "[" + paint(fill, "#" * filled) + paint("2", "-" * (cells - filled)) + "]"
+        bar = (paint(detail, "[") + paint(fill, "#" * filled)
+               + paint(empty, "-" * (cells - filled)) + paint(detail, "]"))
     else:
         full, part = divmod(int(frac * cells * 8 + 1e-9), 8)
         head = "█" * full + (_WP_EIGHTHS[part - 1] if part else "")
-        bar = paint(fill, head) + paint("2", "░" * (cells - len(head)))
-    first = f"{bar} {view['percent']}%"
+        bar = paint(fill, head) + paint(empty, "░" * (cells - len(head)))
+    first = f"{bar} {paint(hue, str(view['percent']) + '%')}"
     label = _wp_trim(view["label"], 40, ell)
     if label:
-        first = f"{paint('1', label)} {first}"
+        first = f"{paint(label_code, label)} {first}"
     count = f"{view['done']}/{view['total']}"
     if view["current_step"]:
         count += f" {'>' if ascii_only else '▸'} {_wp_trim(view['current_step'], 30, ell)}"
-    pieces, elapsed = [first, count], None
+    pieces, elapsed = [first, paint(hue, count)], None
     if view["finished"]:
         check = "" if ascii_only else "✓ "
         pieces.append(paint("32", f"{check}done in {fmt_span(view['elapsed_s'])}"))
     else:
-        elapsed = paint("2", f"{fmt_span(view['elapsed_s'])} in")
+        elapsed = paint(detail, f"{fmt_span(view['elapsed_s'])} in")
         pieces.append(elapsed)
         left = work_progress_left_text(view)
         if left:
-            pieces.append(left)
+            pieces.append(paint(hue, left))
         if view["quiet"]:
             mark = "! " if ascii_only else "⚠ "
             pieces.append(paint("33", f"{mark}quiet {fmt_span(view['quiet_s'])}"))
@@ -2100,9 +2138,9 @@ def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=No
         pieces.remove(elapsed)
     line = sep.join(pieces)
     if view["note"]:
-        room = min(80, budget - visible_len(line) - len(sep)) if budget else 80
+        room = min(80, budget - visible_len(line) - len(raw_sep)) if budget else 80
         if room >= 8:
-            line += sep + paint("2", _wp_trim(view["note"], room, ell))
+            line += sep + paint(detail, _wp_trim(view["note"], room, ell))
     return line
 
 

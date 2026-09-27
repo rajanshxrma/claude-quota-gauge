@@ -36,7 +36,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.22.0-informational)
+![version](https://img.shields.io/badge/version-0.22.1-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -394,7 +394,7 @@ other two, so you can see how far along it is and roughly how long is left
 without asking. The session sets it, marks steps as they finish, and clears
 it at the end; the line exists only while a bar is set.
 
-![the work progress line through a task: set with four named steps and a 1h 30m estimate, a step finishing and the time left re-blending, halfway, a yellow "quiet 21m" mark after twenty minutes without an update, and the finished bar in green reading "done in 1h 42m"](docs/progress-demo.gif)
+![the work progress line through a task, each frame on a light terminal and a dark one: set with four named steps and a 1h 30m estimate, a step finishing, halfway, an amber "quiet 21m" mark after nothing has moved, and the green "done in 1h 42m"](docs/progress-demo.gif)
 
 ```
 release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~35m left · migrating fixtures
@@ -497,6 +497,12 @@ per render, and a session with one reads a file under 1 KB. No extra
 process either way.
 
 **Display.** Colour follows [`NO_COLOR`](https://no-color.org).
+The row is drawn in one calm hue, the bar, the numbers and the note alike,
+with nothing dimmed, so it reads as a single quiet line on a light terminal
+and on a dark one; only the amber `quiet` mark and the green `done` stand
+apart. `CLAUDE_USAGE_PROGRESS_COLOR` changes the look (`plain`, `accent`, or
+a 256-colour number), and `NO_COLOR` removes colour altogether.
+
 `CLAUDE_USAGE_PROGRESS_ASCII=1` (or `--ascii`) draws `[####----]` for
 terminals without block characters. The bar is a tenth of the terminal's
 width (8 to 20 cells) unless `CLAUDE_USAGE_PROGRESS_WIDTH` or `--width`
@@ -535,6 +541,8 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_PROGRESS_DONE_MIN` | `30` | Minutes a finished progress bar stays up with its total time |
 | `CLAUDE_USAGE_PROGRESS_WIDTH` | a tenth of the terminal, 8-20 | Progress bar length in cells |
 | `CLAUDE_USAGE_PROGRESS_ASCII` | unset (off) | Draw the progress bar in ASCII (`[####----]`) for terminals without block characters |
+| `CLAUDE_USAGE_PROGRESS_COLOR` | `calm` | The progress row's look: `calm` (one hue for the whole row, nothing dimmed), `plain` (the terminal's own text colour), `accent` (a warm bar with dimmed details), or a 256-colour number to use as the hue |
+| `CLAUDE_USAGE_PROGRESS_APPEARANCE` | unset | `light` or `dark` picks the deeper or the lighter tone of `calm`; unset uses a middle tone that reads on both |
 
 ## The PENDING.md convention
 

@@ -489,5 +489,58 @@ class StatuslineRowTest(ProgressHome):
         self.assertIn("quota line", lines[0])
 
 
+class PaletteTest(ProgressHome):
+    """0.22.1: the row is one calm hue with nothing dimmed by default, so
+    it reads as a single quiet line on a light terminal and a dark one."""
+
+    DIM = "\x1b[2m"
+
+    def setUp(self):
+        super().setUp()
+        self.four_steps({"build": 1800, "review": 600}, note="migrating fixtures",
+                        eta_at=self.now + 1800, eta_set_at=self.now - 3600)
+
+    def test_calm_is_one_hue_and_never_dims(self):
+        out = self.segment()
+        self.assertIn("38;5;63", out)
+        self.assertNotIn(self.DIM, out)
+        self.assertNotIn("38;5;173", out)
+
+    def test_the_appearance_picks_the_tone(self):
+        light = self.segment(env={"CLAUDE_USAGE_PROGRESS_APPEARANCE": "light"})
+        dark = self.segment(env={"CLAUDE_USAGE_PROGRESS_APPEARANCE": "dark"})
+        self.assertIn("38;5;62", light)
+        self.assertIn("38;5;105", dark)
+        self.assertNotIn(self.DIM, light + dark)
+
+    def test_plain_keeps_the_terminals_own_colour(self):
+        out = self.segment(env={"CLAUDE_USAGE_PROGRESS_COLOR": "plain"})
+        self.assertNotIn("38;5;", out)
+        self.assertNotIn(self.DIM, out)
+        self.assertIn("\x1b[1m", out)
+
+    def test_accent_is_the_warm_bar_with_dimmed_details(self):
+        out = self.segment(env={"CLAUDE_USAGE_PROGRESS_COLOR": "accent"})
+        self.assertIn("38;5;173", out)
+        self.assertIn(self.DIM, out)
+
+    def test_a_number_is_the_hue(self):
+        out = self.segment(env={"CLAUDE_USAGE_PROGRESS_COLOR": "30"})
+        self.assertIn("38;5;30", out)
+        self.assertNotIn("38;5;63", out)
+
+    def test_no_color_wins_over_every_look(self):
+        for look in ("calm", "plain", "accent", "30"):
+            out = self.plain(env={"CLAUDE_USAGE_PROGRESS_COLOR": look})
+            self.assertNotIn("\x1b[", out, look)
+
+    def test_every_look_draws_the_same_words(self):
+        strip = re.compile("\x1b\\[[0-9;]*m")
+        plain = self.plain()
+        for look in ("calm", "plain", "accent", "30"):
+            out = self.segment(env={"CLAUDE_USAGE_PROGRESS_COLOR": look})
+            self.assertEqual(strip.sub("", out), plain, look)
+
+
 if __name__ == "__main__":
     unittest.main()
