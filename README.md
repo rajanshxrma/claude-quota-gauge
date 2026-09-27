@@ -21,7 +21,9 @@ glance whether to stack jobs in parallel or run them one at a time. It
 reads the same signals Activity Monitor does — CPU, GPU, RAM/swap — with no
 `sudo` prompt, and it's kept fresh by a background sampler without ever
 slowing a render. See [Workload gauge](#workload-gauge-io-bound-vs-compute-bound)
-for how to read it.
+for how to read it. And while a session works through a long task, it can
+put up a [work progress bar](#work-progress-bar): named steps, time elapsed,
+and an approximate time left.
 
 If your account also has a separate weekly pool for one model (Fable, on
 Claude Max) that `rate_limits` doesn't break out, there's an optional
@@ -34,7 +36,7 @@ spot (it can't see that model's usage outside this CLI) — it leans hard
 toward reporting itself stale rather than showing a confident wrong number;
 see the section below before relying on it.
 
-![version](https://img.shields.io/badge/version-0.17.0-informational)
+![version](https://img.shields.io/badge/version-0.22.0-informational)
 ![MIT license](https://img.shields.io/badge/license-MIT-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -103,7 +105,8 @@ or a hook errors out because your network is offline or flaky.
    figures, not a local approximation. The command is `statusline.py`, a
    thin wrapper that forwards that payload to `usage-statusline.py` (the
    quota line) and appends the [workload gauge](#workload-gauge-io-bound-vs-compute-bound)
-   line beneath it.
+   line beneath it, plus a [work progress bar](#work-progress-bar) line while
+   the session has one set.
 2. **The script prints the statusline and caches those numbers to disk**
    (`~/.claude/scripts/usage-live.json`), so other things — the
    `SessionStart` hook, the background watcher — can read the latest known
@@ -147,7 +150,7 @@ configure to keep them straight.
 ## Session title chip
 
 Right-aligned against the quota line, a bold filled color chip names what
-this session is currently about — e.g. `cobux-2-0-defect-fixes` or a
+this session is currently about — e.g. `checkout-flow-fixes` or a
 plain-English title for a less-code-shaped session. Claude Code's own UI
 shows a chip like this, but only intermittently; this reproduces it on the
 one surface that renders every single time.
@@ -383,6 +386,123 @@ nothing here ever turns it on for you. When the budget is tight, the same
 injection explicitly tells the session **not** to self-start a run (your
 own explicit request still overrides).
 
+## Work progress bar
+
+A session working through something long — a release, a migration, a
+multi-step refactor — can put a progress bar on its own line under the
+other two, so you can see how far along it is and roughly how long is left
+without asking. The session sets it, marks steps as they finish, and clears
+it at the end; the line exists only while a bar is set.
+
+![the work progress line through a task: set with four named steps and a 1h 30m estimate, a step finishing and the time left re-blending, halfway, a yellow "quiet 21m" mark after twenty minutes without an update, and the finished bar in green reading "done in 1h 42m"](docs/progress-demo.gif)
+
+```
+release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~35m left · migrating fixtures
+```
+
+| Piece | Meaning |
+| --- | --- |
+| `release 2.4` | The label the task was given |
+| bar, `50%` | Steps finished out of the total. The fill moves in eighths of a cell, so a long count advances smoothly |
+| `2/4 ▸ test` | 2 of 4 steps done; `test` is the one in progress (named steps only) |
+| `42m in` | Time since the bar was set |
+| `~35m left` | Approximate time left — see below. `finishing` at the very end; `past estimate` when the stated time has passed before any step finished to measure a pace |
+| `⚠ quiet 25m` | Yellow: nothing has updated the bar for 25 minutes. This is how a stalled run shows |
+| last, dimmed | The latest note, trimmed to fit the terminal |
+
+When the last step finishes, the line turns green and reads
+`✓ done in 1h 42m` for 30 minutes, then hides. A bar nobody has touched for
+8 hours hides too, so a session that ended mid-task never leaves one on
+screen.
+
+### Commands
+
+```bash
+wp() { python3 ~/.claude/scripts/work-progress.py "$@"; }
+
+wp set "release 2.4" --steps "build,review,test,ship" --eta 1h30m
+wp step build             # or plain `wp step`: finishes the current step
+wp note "migrating fixtures"
+wp eta 40m                # restate the estimate, counted from now
+wp status                 # everything the bar knows; --json for scripts
+wp clear
+```
+
+| Command | What it does |
+| --- | --- |
+| `set LABEL [--steps a,b,c \| --total N] [--eta DUR]` | Starts a bar. Run again with the same label while it's going, it re-plans and keeps the clock and the finished steps (`--restart` starts over). Also takes `--note`, `--done N` and `--quiet-min N` |
+| `step [NAME]` (or `done`) | Marks `NAME` finished, or the current step. Steps finish in any order, so parallel lanes count correctly; a unique prefix of a name is enough |
+| `bump` | Marks the current step finished |
+| `note TEXT` | Replaces the note; no text clears it |
+| `eta DUR` / `eta off` | Restates the estimate, counted from now: `45m`, `1h30m`, `1.5h`, or plain minutes |
+| `status [--json]` | Steps, elapsed time, how the time left was worked out, time since the last update, and whether the bar is showing |
+| `segment [--width N] [--ascii]` | The line itself, exactly as the status line draws it |
+| `clear` | Removes the bar |
+
+`step`, `bump` and `note` take `--note` and `--eta` too, so one command can
+finish a step and restate the estimate.
+
+**One bar per session.** Every command acts on the calling session's own
+bar: Claude Code sets `CLAUDE_CODE_SESSION_ID` in every shell a session
+runs, so there's nothing to pass. From a plain terminal, pass `--session
+<id>` (the id in the bar's `claude --resume <id>`). Two sessions side by
+side each get their own bar, and neither can see or change the other's.
+State lives in `~/.claude/scripts/work-progress-<session>.json`, written
+atomically under a lock, so parallel lanes finishing at the same moment all
+count; files untouched for a week are pruned. A missing or unreadable file
+draws nothing and leaves the rest of the status line alone, and a command
+with nothing to act on says so on stderr and exits 0, so it never fails the
+command chain around it.
+
+### How the time left is worked out
+
+Two figures, blended. The **estimate** is the one the session stated
+(`--eta`); it knows what the remaining work looks like. The **pace** is
+measured: time per finished step so far, times the steps left, less the
+time already spent on the current one. It needs at least a minute of
+finished work behind it, so steps ticked off right after `set` don't count
+as a pace. The pace's weight is the share of steps finished since the
+estimate was given: an even mix halfway through four steps, three parts
+pace to one at three of four. Restating the estimate (`eta 40m`) gives it
+full weight again, since a fresh estimate already accounts for the pace so
+far. An estimate whose time has passed is dropped rather than counted as
+zero.
+
+The result is rounded to what an estimate can claim — the nearest minute
+under 10 minutes, 5 minutes under an hour, 10 minutes beyond — never goes
+below zero, and reads `finishing` under 90 seconds. The `~` is there
+because it is an estimate.
+
+### Having sessions keep it current
+
+The bar is only as good as its updates. To have sessions use it on their
+own, add something like this to your `CLAUDE.md`:
+
+```markdown
+## Progress bar
+For any task with several steps or longer than about 20 minutes:
+- at the start: `python3 ~/.claude/scripts/work-progress.py set "<short label>" --steps "<a,b,c>" --eta <estimate>`
+- as each step finishes, in the same turn: `python3 ~/.claude/scripts/work-progress.py step <name>`
+- when the estimate stops being right: `python3 ~/.claude/scripts/work-progress.py eta <new estimate>`
+- when the work is delivered: `python3 ~/.claude/scripts/work-progress.py clear`
+The time left is an estimate: give an honest one, never padded or trimmed.
+```
+
+Or type `/progress <what you're about to do>` to have the session set one
+up, and `/progress` alone to see where it stands.
+
+**Cost.** `statusline.py` reads the bar in-process, the same way it reads
+the ultracode marker: a session with no bar pays one file-existence check
+per render, and a session with one reads a file under 1 KB. No extra
+process either way.
+
+**Display.** Colour follows [`NO_COLOR`](https://no-color.org).
+`CLAUDE_USAGE_PROGRESS_ASCII=1` (or `--ascii`) draws `[####----]` for
+terminals without block characters. The bar is a tenth of the terminal's
+width (8 to 20 cells) unless `CLAUDE_USAGE_PROGRESS_WIDTH` or `--width`
+sets it, and the line trims its note, then drops the elapsed time, rather
+than wrap.
+
 ## Configuration
 
 `install.sh` copies `config/claude-quota-gauge.env.example` to
@@ -410,6 +530,11 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_UC_RESET_SOON` | `600` | Seconds. A pool resetting this soon or sooner is a `"reset_soon"` candidate — see above |
 | `CLAUDE_USAGE_UC_RESET_SOON_PCT` | `15` | Points already used. `"reset_soon"` only fires above this much usage on the pool — see above |
 | `CLAUDE_USAGE_SWITCH_BLOCK_PCT` | `0` (annotate only) | Deny a `/model` switch onto the tracked model once its weekly estimate is at or past this % — see [Model-switch guard](#model-switch-guard-and-prompt-cache) |
+| `CLAUDE_USAGE_PROGRESS_QUIET_MIN` | `20` | Minutes without an update before the progress bar shows `⚠ quiet`; `0` turns the mark off — see [Work progress bar](#work-progress-bar) |
+| `CLAUDE_USAGE_PROGRESS_STALE_HOURS` | `8` | Hours untouched before a progress bar hides |
+| `CLAUDE_USAGE_PROGRESS_DONE_MIN` | `30` | Minutes a finished progress bar stays up with its total time |
+| `CLAUDE_USAGE_PROGRESS_WIDTH` | a tenth of the terminal, 8-20 | Progress bar length in cells |
+| `CLAUDE_USAGE_PROGRESS_ASCII` | unset (off) | Draw the progress bar in ASCII (`[####----]`) for terminals without block characters |
 
 ## The PENDING.md convention
 

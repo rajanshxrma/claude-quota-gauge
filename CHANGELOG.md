@@ -4,6 +4,61 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] - 2026-09-27
+
+### Added
+- **Work progress bar.** A session working through a long task can put a
+  bar on its own status line row --
+  `release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~35m left · migrating fixtures`
+  -- so progress and an approximate time left are visible without asking.
+  `bin/work-progress.py` writes it (`set`, `step`/`done`, `bump`, `note`,
+  `eta`, `clear`) and reads it back (`status`, `status --json`, `segment`);
+  the new `/progress` command sets one up from inside a session or shows
+  where it stands.
+  - **Named steps** (`--steps "build,review,test,ship"`) that can finish in
+    any order, so parallel lanes count correctly; the row names the step
+    in progress next to `n/m`. `--total N` still makes plain counted steps.
+  - **Time left blends the stated estimate with the measured pace.** Each
+    step finished after the estimate moves weight from the estimate to the
+    pace, and restating the estimate gives it full weight again. Shown as
+    `~1h 20m left`, rounded to what an estimate can claim, never negative,
+    `finishing` at the very end, `past estimate` when the stated time has
+    passed before any step finished.
+  - **Elapsed time, percent, and a quiet mark**: a yellow `⚠ quiet 25m`
+    once nothing has updated the bar for `CLAUDE_USAGE_PROGRESS_QUIET_MIN`
+    minutes (default 20, or `--quiet-min` per bar), so a stalled run shows.
+  - **A finished bar turns green** with its total time (`✓ done in 1h 42m`)
+    for `CLAUDE_USAGE_PROGRESS_DONE_MIN` minutes (30), then hides; a bar
+    untouched for `CLAUDE_USAGE_PROGRESS_STALE_HOURS` (8) hides too.
+  - **One bar per session.** `--session`, defaulting to the
+    `CLAUDE_CODE_SESSION_ID` Claude Code sets in every session shell. State
+    is `~/.claude/scripts/work-progress-<session>.json`, written atomically
+    under a lock; files untouched for a week are pruned. A missing or
+    unreadable file draws nothing, and a command with nothing to act on
+    exits 0 so it never fails the command chain around it.
+  - **Display.** Honours `NO_COLOR`; `CLAUDE_USAGE_PROGRESS_ASCII=1` or
+    `--ascii` for terminals without block glyphs. The bar is a tenth of the
+    terminal width (8-20 cells) unless `--width` or
+    `CLAUDE_USAGE_PROGRESS_WIDTH` sets it, and the row trims its note
+    rather than wrap.
+- `statusline.py` draws the bar as a third line, only while this session
+  has one. It's read in-process like the ultracode indicator: no extra
+  process, and a session without a bar pays one file-existence check.
+- A "Work progress bar" section in the README, with a demo GIF
+  (`docs/progress-demo.gif`, drawn by the real renderer) and a `CLAUDE.md`
+  snippet that has sessions keep the bar current on their own.
+- `tests/test_work_progress.py`: 43 tests covering the time-left blend, the
+  quiet mark, per-session isolation, corrupt state files, `NO_COLOR` and
+  ASCII output, named steps, width fitting, the `status --json` shape,
+  parallel step writes, and the status line row itself.
+
+### Fixed
+- **`VERSION` matches the release again.** It stayed at 0.20.1 through
+  0.21.0, and the update check compares `VERSION`, so auto-updating
+  installs never received 0.21.0's fixes. It now reads 0.22.0, which
+  carries them along. The README's version badge was stale too (0.17.0)
+  and is current again.
+
 ## [0.21.0] - 2026-09-19
 
 ### Fixed

@@ -37,8 +37,9 @@ cp "$SCRIPT_DIR"/bin/*.py "$SCRIPTS_DIR/"
 chmod +x "$SCRIPTS_DIR"/*.py
 cp "$SCRIPT_DIR"/commands/pending.md "$COMMANDS_DIR/"
 cp "$SCRIPT_DIR"/commands/gauge-calibrate.md "$COMMANDS_DIR/"
+cp "$SCRIPT_DIR"/commands/progress.md "$COMMANDS_DIR/"
 echo "  copied scripts to $SCRIPTS_DIR"
-echo "  copied /pending and /gauge-calibrate to $COMMANDS_DIR"
+echo "  copied /pending, /gauge-calibrate and /progress to $COMMANDS_DIR"
 
 # Records the installed version so update-check-session-hook.py has something
 # to compare the latest upstream VERSION against. Re-running install.sh after
@@ -293,6 +294,10 @@ echo "      run /gauge-calibrate once to turn it on"
 echo "    - the 'pending: N' count -- set up above, or any time later"
 echo "    - a background launchd watcher for threshold notifications, and"
 echo "      macOS UI-theme-drift detection (CLAUDE_USAGE_THEME_WATCH=1)"
+echo ""
+echo "  On demand: a work progress bar a session puts up for a long task --"
+echo "  steps, elapsed time, time left -- as a third statusline line while"
+echo "  it's set. /progress <task> in a session sets one up; see README."
 echo ""
 echo "  Also on by default: a once-a-day check for a newer claude-quota-gauge"
 echo "  that auto-applies it and tells you what changed (set"

@@ -43,6 +43,12 @@ built from real content + `right_align()`, both needs no _SOLO_ANCHOR at all
 by Claude Code's per-line trim -- see usage_common.py -- and neither line
 here is solo anymore).
 
+A third line appears only while this session has a work progress bar set
+(bin/work-progress.py -- see work_progress_line() in usage_common.py). The
+same line-gap cost is why it isn't there otherwise: a session with no bar
+pays one os.path.exists() for it and gets exactly the two lines above. It's
+drawn in-process like the ultracode indicator, so it adds no subprocess.
+
 If any piece errors, its line/segment is simply omitted rather than breaking
 the whole statusline.
 """
@@ -67,6 +73,7 @@ from usage_common import (  # noqa: E402
     title_disambiguation,
     ultracode_readiness,
     ultracode_state,
+    work_progress_line,
 )
 
 load_env_file()  # the uc cost knobs live in the env file; subprocesses load it themselves
@@ -127,5 +134,13 @@ if uc:
 resume = f"\033[2m↳ claude --resume {session_id}\033[0m" if session_id else ""
 if seg or resume:
     lines.append(right_align(seg, resume))
+
+# Work progress bar: its own last line, only while this session has one set.
+try:
+    progress = work_progress_line(session_id, datetime.now(timezone.utc))
+except Exception:
+    progress = ""
+if progress:
+    lines.append(progress)
 
 sys.stdout.write("\n".join(lines))

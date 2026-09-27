@@ -1754,3 +1754,373 @@ def title_chip(title, session_id, changed=False, columns=None):
     body = f" {marker}{text} "
     bg = _session_color(session_id)
     return f"\033[1m\033[48;5;{bg}m\033[38;5;16m{body}\033[0m"
+
+
+# ---- work progress bar ---------------------------------------------------
+# One bar per session: bin/work-progress.py writes it (set / step / note /
+# eta / clear) and statusline.py draws it as an extra last line while one
+# is set. Same split as the ultracode marker above: the CLI owns every write
+# and these helpers only read and render, so a statusline render stays
+# write-free. State is one small JSON file per session id, so sessions open
+# side by side can never see or change each other's bar.
+
+WORK_PROGRESS_DIR = os.path.expanduser("~/.claude/scripts")
+_WP_MAX_BYTES = 65536  # a real state file is well under 1 KB
+_WP_SESSION_RE = re.compile(r"[^A-Za-z0-9_-]")
+_WP_EIGHTHS = "▏▎▍▌▋▊▉"  # sub-cell fill, so a long bar moves smoothly
+_WP_MIN_PACE_SPAN = 60  # seconds; steps ticked off right after `set` measure nothing
+
+
+def _env_float(name, default):
+    """A numeric knob, read lazily (after load_env_file()) for the same
+    reason as _uc_cost(); blank or unparseable falls back to `default`."""
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def work_progress_path(session_id):
+    """The state file for one session's bar, or None without a usable id.
+    The id is cut down to [A-Za-z0-9_-] so it can't name a path outside
+    WORK_PROGRESS_DIR."""
+    safe = _WP_SESSION_RE.sub("", str(session_id or ""))[:80]
+    if not safe:
+        return None
+    return os.path.join(WORK_PROGRESS_DIR, f"work-progress-{safe}.json")
+
+
+def _wp_time(value):
+    """Epoch seconds from a number or an ISO-8601 string, else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
+
+
+def work_progress_normalize(raw, session_id=None):
+    """Validated state from a parsed file, or None when its shape makes no
+    sense: wrong types, no start time, or another session's id inside. A
+    minimal hand-written file (label, done, total, started_at, updated_at)
+    is enough; everything else gets its default. `measured` counts the
+    finished steps that have a real finish time, which is what the pace
+    is computed from: steps passed in as already done at `set` time count
+    toward the percentage but not toward the pace."""
+    if not isinstance(raw, dict):
+        return None
+    owner = raw.get("session")
+    if owner and session_id and owner != session_id:
+        return None
+    steps = raw.get("steps") or []
+    if not isinstance(steps, list) or not all(isinstance(s, str) and s for s in steps):
+        return None
+    if len(set(steps)) != len(steps):
+        return None
+    finished_raw = raw.get("finished") or {}
+    if not isinstance(finished_raw, dict):
+        return None
+    finished = {name: _wp_time(t) for name, t in finished_raw.items() if name in steps}
+    try:
+        if steps:
+            total, done = len(steps), len(finished)
+            measured = sum(1 for t in finished.values() if t is not None)
+        else:
+            total, done = int(raw.get("total") or 1), int(raw.get("done") or 0)
+            base = int(raw.get("done_at_start") or 0)
+            measured = max(0, done - max(0, base))
+    except (TypeError, ValueError):
+        return None
+    if total < 1 or done < 0:
+        return None
+    done = min(done, total)
+    measured = min(measured, done)
+    started = _wp_time(raw.get("started_at"))
+    updated = _wp_time(raw.get("updated_at"))
+    started = started if started is not None else updated
+    updated = updated if updated is not None else started
+    if started is None:
+        return None
+    last_done = _wp_time(raw.get("last_done_at"))
+    if last_done is None and measured:
+        last_done = max([t for t in finished.values() if t is not None] or [updated])
+    finished_at = _wp_time(raw.get("finished_at"))
+    if finished_at is None and done >= total:
+        finished_at = last_done if last_done is not None else updated
+    quiet_min = raw.get("quiet_min")
+    if isinstance(quiet_min, bool) or not isinstance(quiet_min, (int, float)):
+        quiet_min = None
+    eta_done = raw.get("eta_done")
+    if isinstance(eta_done, bool) or not isinstance(eta_done, int):
+        eta_done = None
+    label, note = raw.get("label"), raw.get("note")
+    return {
+        "session": owner or session_id or "",
+        "label": label if isinstance(label, str) else "",
+        "note": note if isinstance(note, str) else "",
+        "steps": steps, "finished": finished, "total": total, "done": done,
+        "measured": measured, "started_at": started, "updated_at": updated,
+        "last_done_at": last_done, "finished_at": finished_at,
+        "eta_at": _wp_time(raw.get("eta_at")), "eta_done": eta_done,
+        "quiet_min": quiet_min,
+    }
+
+
+def work_progress_load(session_id):
+    """This session's bar, or None: no id, no file, a file too big to be
+    one, unparseable JSON, or a shape work_progress_normalize() rejects.
+    Every failure reads as "no bar", so a broken file never draws a wrong
+    one and never breaks the render around it."""
+    path = work_progress_path(session_id)
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        if os.path.getsize(path) > _WP_MAX_BYTES:
+            return None
+        with open(path, encoding="utf-8") as f:
+            return work_progress_normalize(json.load(f), session_id)
+    except Exception:
+        return None
+
+
+def work_progress_view(state, now):
+    """Everything the bar shows, worked out in one place for the status
+    line, `status` and `status --json`, so the three never disagree.
+
+    Time left blends two figures. The stated estimate (`eta_at`) carries
+    what the session knows about the work ahead; the measured pace (time
+    per finished step so far) carries what the work has actually cost.
+    Each step finished after the estimate was given moves weight from the
+    first to the second (weight = steps finished since the estimate /
+    steps that were left when it was given), so the figure starts as the
+    estimate and ends as the pace -- and a restated estimate starts at
+    full weight again, since it already knows the pace up to that point.
+    A stated time that has already passed is dropped rather than averaged
+    in as zero, and nothing here ever goes negative."""
+    now_ts = now.timestamp()
+    total, done, measured = state["total"], state["done"], state["measured"]
+    started, updated = state["started_at"], state["updated_at"]
+    finished = done >= total
+    end = (state["finished_at"] or updated) if finished else now_ts
+    elapsed = max(0.0, end - started)
+    since_update = max(0.0, now_ts - updated)
+
+    stated = pace = pace_left = left = source = None
+    if not finished:
+        if state["eta_at"] is not None:
+            stated = state["eta_at"] - now_ts
+        last = state["last_done_at"]
+        if measured and last is not None and last - started >= _WP_MIN_PACE_SPAN:
+            pace = (last - started) / measured
+            into_current = max(0.0, now_ts - last)
+            pace_left = max(0.0, pace - into_current) + pace * (total - done - 1)
+        base = state["eta_done"]
+        base = min(done, base if base is not None else done - measured)
+        weight = (done - base) / max(1, total - base)
+        if pace_left is not None and stated is not None and stated > 0 and weight > 0:
+            left, source = weight * pace_left + (1 - weight) * stated, "blend"
+        elif stated is not None and stated > 0:
+            left, source = stated, "estimate"
+        elif pace_left is not None:
+            left, source = pace_left, "pace"
+        elif stated is not None:
+            left, source = 0.0, "past_estimate"
+
+    quiet_min = state["quiet_min"]
+    if quiet_min is None:
+        quiet_min = _env_float("CLAUDE_USAGE_PROGRESS_QUIET_MIN", 20)
+    quiet_after = max(0.0, quiet_min) * 60
+    hidden = None
+    if since_update > _env_float("CLAUDE_USAGE_PROGRESS_STALE_HOURS", 8) * 3600:
+        hidden = "stale"
+    elif finished and now_ts - (state["finished_at"] or updated) > \
+            _env_float("CLAUDE_USAGE_PROGRESS_DONE_MIN", 30) * 60:
+        hidden = "finished"
+
+    def iso(ts):
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts is not None else None
+
+    def secs(value):
+        return int(round(value)) if value is not None else None
+
+    steps = [{"name": n, "done": n in state["finished"],
+              "finished_at": iso(state["finished"].get(n))} for n in state["steps"]]
+    return {
+        "label": state["label"], "note": state["note"],
+        "done": done, "total": total,
+        "percent": 100 if finished else min(99, int(100 * done / total)),
+        "steps": steps,
+        "current_step": next((s["name"] for s in steps if not s["done"]), None),
+        "started_at": iso(started), "updated_at": iso(updated),
+        "eta_at": iso(state["eta_at"]), "finished_at": iso(state["finished_at"]) if finished else None,
+        "elapsed_s": secs(elapsed),
+        "left_s": secs(left), "left_source": source,
+        "estimate_left_s": secs(max(0.0, stated)) if stated is not None else None,
+        "pace_s_per_step": secs(pace), "pace_left_s": secs(pace_left),
+        "quiet": (not finished) and quiet_after > 0 and since_update >= quiet_after,
+        "quiet_s": secs(since_update), "quiet_after_s": secs(quiet_after),
+        "finished": finished,
+        "visible": hidden is None, "hidden_reason": hidden,
+    }
+
+
+def work_progress_no_color():
+    """https://no-color.org: any non-empty NO_COLOR turns colour off."""
+    return os.environ.get("NO_COLOR", "") != ""
+
+
+def work_progress_ascii_default():
+    """ASCII glyphs when asked for (CLAUDE_USAGE_PROGRESS_ASCII=1), or when
+    stdout's encoding can't carry the block characters at all."""
+    if os.environ.get("CLAUDE_USAGE_PROGRESS_ASCII", "").strip() not in ("", "0"):
+        return True
+    try:
+        "█░▏▸✓⚠·…".encode(getattr(sys.stdout, "encoding", None) or "utf-8")
+    except (LookupError, UnicodeEncodeError):
+        return True
+    return False
+
+
+def _live_columns():
+    """COLUMNS when Claude Code sets it this render, else the controlling
+    terminal's width, else None -- the same order right_align() uses."""
+    try:
+        columns = int(os.environ.get("COLUMNS", ""))
+    except ValueError:
+        columns = None
+    return columns or _tty_columns()
+
+
+def fmt_span(seconds):
+    """Exact duration, e.g. '42m', '1h 5m', '2d 3h'."""
+    seconds = max(0, int(seconds or 0))
+    if seconds < 60:
+        return "<1m"
+    hours, mins = divmod(seconds // 60, 60)
+    if hours >= 24:
+        return f"{hours // 24}d {hours % 24}h"
+    if hours:
+        return f"{hours}h {mins}m" if mins else f"{hours}h"
+    return f"{mins}m"
+
+
+def fmt_span_approx(seconds):
+    """An estimate rounded to what it can honestly claim: the nearest
+    minute under 10m, 5m under an hour, 10m beyond."""
+    mins = max(0.0, seconds) / 60
+    step = 1 if mins < 10 else 5 if mins < 60 else 10
+    return fmt_span(max(step, int(round(mins / step)) * step) * 60)
+
+
+def _wp_trim(text, limit, ellipsis):
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - len(ellipsis))].rstrip() + ellipsis
+
+
+def work_progress_left_text(view):
+    source = view["left_source"]
+    if source is None:
+        return ""
+    if source == "past_estimate":
+        return "past estimate"
+    if view["left_s"] < 90:
+        return "finishing"
+    return f"~{fmt_span_approx(view['left_s'])} left"
+
+
+def _wp_bar_cells(width, columns):
+    """Bar length in cells: --width, then CLAUDE_USAGE_PROGRESS_WIDTH, then
+    a tenth of the terminal (8-20 cells), then 12."""
+    for value in (width, _env_float("CLAUDE_USAGE_PROGRESS_WIDTH", 0)):
+        try:
+            if value and int(value) > 0:
+                return max(4, min(60, int(value)))
+        except (TypeError, ValueError):
+            pass
+    return max(8, min(20, columns // 10)) if columns else 12
+
+
+def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=None):
+    """One status-line row for a bar, e.g.
+    'release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~40m left · note'
+    -- green with '✓ done in 1h 42m' once the last step finishes, and a
+    yellow '⚠ quiet 25m' while nothing has updated it past the quiet
+    threshold. Sized to the terminal (`columns`, default the live width)
+    so it never wraps: the note is trimmed first, then dropped, then the
+    elapsed time goes."""
+    if columns is None:
+        columns = _live_columns()
+
+    def paint(code, text):
+        return f"\033[{code}m{text}\033[0m" if color and text else text
+
+    sep, ell = (" | ", "...") if ascii_only else (" · ", "…")
+    cells = _wp_bar_cells(width, columns)
+    frac = view["done"] / view["total"]
+    fill = "32" if view["finished"] else "38;5;173"
+    if ascii_only:
+        filled = int(frac * cells + 1e-9)
+        bar = "[" + paint(fill, "#" * filled) + paint("2", "-" * (cells - filled)) + "]"
+    else:
+        full, part = divmod(int(frac * cells * 8 + 1e-9), 8)
+        head = "█" * full + (_WP_EIGHTHS[part - 1] if part else "")
+        bar = paint(fill, head) + paint("2", "░" * (cells - len(head)))
+    first = f"{bar} {view['percent']}%"
+    label = _wp_trim(view["label"], 40, ell)
+    if label:
+        first = f"{paint('1', label)} {first}"
+    count = f"{view['done']}/{view['total']}"
+    if view["current_step"]:
+        count += f" {'>' if ascii_only else '▸'} {_wp_trim(view['current_step'], 30, ell)}"
+    pieces, elapsed = [first, count], None
+    if view["finished"]:
+        check = "" if ascii_only else "✓ "
+        pieces.append(paint("32", f"{check}done in {fmt_span(view['elapsed_s'])}"))
+    else:
+        elapsed = paint("2", f"{fmt_span(view['elapsed_s'])} in")
+        pieces.append(elapsed)
+        left = work_progress_left_text(view)
+        if left:
+            pieces.append(left)
+        if view["quiet"]:
+            mark = "! " if ascii_only else "⚠ "
+            pieces.append(paint("33", f"{mark}quiet {fmt_span(view['quiet_s'])}"))
+    budget = columns - RIGHT_ALIGN_MARGIN if columns else None
+    if budget and elapsed and visible_len(sep.join(pieces)) > budget:
+        pieces.remove(elapsed)
+    line = sep.join(pieces)
+    if view["note"]:
+        room = min(80, budget - visible_len(line) - len(sep)) if budget else 80
+        if room >= 8:
+            line += sep + paint("2", _wp_trim(view["note"], room, ell))
+    return line
+
+
+def work_progress_line(session_id, now):
+    """statusline.py's progress row for this session, or "" -- no bar set
+    (costs one os.path.exists() and nothing more), a hidden bar, or any
+    error at all, since a render must never break on this file."""
+    path = work_progress_path(session_id)
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        state = work_progress_load(session_id)
+        if not state:
+            return ""
+        view = work_progress_view(state, now)
+        if not view["visible"]:
+            return ""
+        return fmt_work_progress(view, color=not work_progress_no_color(),
+                                 ascii_only=work_progress_ascii_default())
+    except Exception:
+        return ""
