@@ -4,12 +4,21 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.1] - 2026-09-28
+
+### Changed
+- **The battery cell is drawn with the same blocks as the progress bar**
+  (`█▍░░ 35% 2:10`): filled cells, then the empty part in `░`. 0.24.0 drew
+  thin walls around the cell; in Apple's Terminal the left wall merged with
+  the fill and the right one stood apart from it. The ASCII form keeps its
+  brackets. 25 tests.
+
 ## [0.24.0] - 2026-09-28
 
 ### Added
 - **The battery, in the workload line.** On a Mac with a battery the line
   ends with a small cell: a glyph that fills with the level an eighth of a
-  cell at a time, the percentage, and the time left (`▕█▎  ▏35% 2:10`). Green
+  cell at a time, the percentage, and the time left. Green
   from 50%, yellow from 20%, red below; under 20% on battery the cell
   breathes between two reds at each redraw, and under 10% it carries `⚠`.
   While charging it shows `⚡` and the edge of the fill rises a step at each

@@ -77,12 +77,12 @@ class TheGlyph(unittest.TestCase):
                 self.assertEqual(len(WG.battery_cells(pct, rising=rising, ascii_only=True)), WG.BATTERY_CELLS)
 
     def test_empty_full_and_the_smallest_charge(self):
-        self.assertEqual(WG.battery_cells(0), " " * WG.BATTERY_CELLS)
+        self.assertEqual(WG.battery_cells(0), "░" * WG.BATTERY_CELLS)
         self.assertEqual(WG.battery_cells(100), "█" * WG.BATTERY_CELLS)
-        self.assertNotEqual(WG.battery_cells(1), " " * WG.BATTERY_CELLS)
+        self.assertNotEqual(WG.battery_cells(1), "░" * WG.BATTERY_CELLS)
 
     def test_the_fill_never_shrinks_as_the_level_rises(self):
-        order = " " + WG._BATTERY_EIGHTHS + "█"
+        order = "░" + WG._BATTERY_EIGHTHS + "█"
 
         def weight(cells):
             return sum(order.index(ch) for ch in cells)
@@ -111,6 +111,11 @@ class TheCell(unittest.TestCase):
     def test_nothing_is_drawn_without_a_battery(self):
         self.assertEqual(WG.fmt_battery(None), "")
 
+    def test_the_glyph_has_no_walls_and_shows_its_empty_part(self):
+        out = self.cell(35, "discharging", 130, now_ts=0, color=False)
+        self.assertEqual(out, "█▍░░ 35% 2:10")
+        self.assertNotIn("▕", out)
+
     def test_the_words_of_each_state(self):
         self.assertTrue(self.cell(15, "discharging", 26, now_ts=0, color=False).endswith("15% 0:26"))
         self.assertTrue(self.cell(54, "charging", 65, now_ts=0, color=False).endswith("⚡54% 1:05"))
@@ -131,8 +136,8 @@ class TheCell(unittest.TestCase):
     def test_charging_moves_and_the_words_hold_still(self):
         frames = [self.cell(54, "charging", 65, now_ts=t, color=False) for t in range(0, 16, 2)]
         self.assertGreater(len(set(frames)), 1)
-        # the words follow the glyph's right wall, its last "▏"
-        self.assertEqual(len({f.rsplit("▏", 1)[1] for f in frames}), 1)
+        # the words follow the glyph and one space
+        self.assertEqual(len({f[WG.BATTERY_CELLS + 1:] for f in frames}), 1)
         self.assertEqual(len({len(f) for f in frames}), 1)
 
     def test_full_and_held_sit_still(self):

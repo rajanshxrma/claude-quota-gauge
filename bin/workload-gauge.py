@@ -270,7 +270,7 @@ def battery_cells(pct, cells=BATTERY_CELLS, rising=0, ascii_only=False):
         filled = full + (1 if part >= 4 else 0)
         return "#" * filled + "-" * (cells - filled)
     body = "█" * full + (_BATTERY_EIGHTHS[part - 1] if part else "")
-    return body + " " * (cells - len(body))
+    return body + "░" * (cells - len(body))
 
 
 def fmt_minutes(minutes):
@@ -278,7 +278,10 @@ def fmt_minutes(minutes):
 
 
 def fmt_battery(battery, now_ts=None, color=True, ascii_only=False, live=True):
-    """The battery as one small cell of the status line, e.g. `▕█▎  ▏15% 0:26`.
+    """The battery as one small cell of the status line, e.g. `█▎░░ 35% 2:10`:
+    the same filled and empty blocks as the work progress bar. (0.24.0 drew
+    thin walls around it; in Apple's Terminal the left wall vanished into the
+    fill and the right one stood alone like a stray bar.)
 
     Alive without being loud: while charging the fill's edge rises a step per
     redraw; under BATTERY_LOW on battery the cell breathes between two reds.
@@ -292,8 +295,8 @@ def fmt_battery(battery, now_ts=None, color=True, ascii_only=False, live=True):
     charging = state == "charging"
     low = state == "discharging" and pct < BATTERY_LOW
     rising = beat % 8 if (charging and live) else 0
-    left, right = ("[", "]") if ascii_only else ("▕", "▏")
-    glyph = f"{left}{battery_cells(pct, rising=rising, ascii_only=ascii_only)}{right}"
+    inside = battery_cells(pct, rising=rising, ascii_only=ascii_only)
+    glyph = f"[{inside}]" if ascii_only else f"{inside} "
     text = f"{pct}%"
     if charging:
         text = ("+" if ascii_only else "⚡") + text

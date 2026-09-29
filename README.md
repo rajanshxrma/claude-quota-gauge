@@ -293,11 +293,11 @@ On a Mac with a battery, the same line ends with a small battery cell, so the
 charge is in view while a long session runs:
 
 ```
-⚙  compute 12%  io 3%  ram 61%  → mixed  ▕█▎  ▏35% 2:10
-                                          │     │    │
-                                          │     │    └─ time left on battery (time to full while charging)
-                                          │     └─ the level
-                                          └─ the glyph fills with the level, an eighth of a cell at a time
+⚙  compute 12%  io 3%  ram 61%  → mixed  █▍░░ 35% 2:10
+                                          │    │   │
+                                          │    │   └─ time left on battery (time to full while charging)
+                                          │    └─ the level
+                                          └─ four cells that fill with the level, an eighth of a cell at a time
 ```
 
 | State | How it reads |
