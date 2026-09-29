@@ -287,6 +287,36 @@ goes truly stale, the line shows `⚠ stale` rather than a confident old number.
 IOAccelerator `Device Utilization %`), deliberately not `powermetrics`, so the
 gauge never prompts for a password.
 
+### Battery
+
+On a Mac with a battery, the same line ends with a small battery cell, so the
+charge is in view while a long session runs:
+
+```
+⚙  compute 12%  io 3%  ram 61%  → mixed  ▕█▎  ▏35% 2:10
+                                          │     │    │
+                                          │     │    └─ time left on battery (time to full while charging)
+                                          │     └─ the level
+                                          └─ the glyph fills with the level, an eighth of a cell at a time
+```
+
+| State | How it reads |
+| --- | --- |
+| On battery, 50% and up | green |
+| On battery, 20% to 49% | yellow |
+| On battery, under 20% | red, breathing between two reds at each redraw; under 10% it carries `⚠` as well |
+| Charging | green with `⚡`, and the edge of the fill rises a step at each redraw |
+| Charged, or plugged in and held | dimmed green, still |
+
+The level comes from `pmset -g batt`, read by the background writer together
+with the rest of the sample, so a redraw never waits for it. While the Mac
+runs on battery the writer samples less often (every 5 seconds, every 8 under
+20%), so the gauge itself draws less from a battery that is running down.
+A Mac without a battery shows no cell. `CLAUDE_USAGE_BATTERY=0` leaves the
+cell out; `CLAUDE_USAGE_PROGRESS_LIVE=0` holds it still;
+`CLAUDE_USAGE_PROGRESS_ASCII=1` draws it as `[#---]35% 2:10`; `NO_COLOR` is
+honoured.
+
 Run it full-screen any time for the detailed view — both gauges, the verdict,
 CPU/GPU/RAM breakdown, and the top processes eating the machine:
 
@@ -586,6 +616,7 @@ need — it's loaded automatically, including by the statusline command, the
 | `CLAUDE_USAGE_PROGRESS_ASCII` | unset (off) | Draw the progress bar in ASCII (`[####----]`) for terminals without block characters |
 | `CLAUDE_USAGE_PROGRESS_COLOR` | `calm` | The progress row's look: `calm` (one hue for the whole row, nothing dimmed), `plain` (the terminal's own text colour), `accent` (a warm bar with dimmed details), or a 256-colour number to use as the hue |
 | `CLAUDE_USAGE_PROGRESS_APPEARANCE` | unset | `light` or `dark` picks the deeper or the lighter tone of `calm`; unset uses a middle tone that reads on both |
+| `CLAUDE_USAGE_BATTERY` | `1` (on) | `0` leaves the battery cell out of the workload line — see [Battery](#battery) |
 
 ## The PENDING.md convention
 

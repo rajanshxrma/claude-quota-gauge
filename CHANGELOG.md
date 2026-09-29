@@ -4,6 +4,31 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] - 2026-09-28
+
+### Added
+- **The battery, in the workload line.** On a Mac with a battery the line
+  ends with a small cell: a glyph that fills with the level an eighth of a
+  cell at a time, the percentage, and the time left (`▕█▎  ▏35% 2:10`). Green
+  from 50%, yellow from 20%, red below; under 20% on battery the cell
+  breathes between two reds at each redraw, and under 10% it carries `⚠`.
+  While charging it shows `⚡` and the edge of the fill rises a step at each
+  redraw; charged, or plugged in and held, it sits still and dimmed.
+  - The level is read from `pmset -g batt` by the background writer with the
+    rest of the sample, so a redraw never waits for it and needs no `sudo`.
+  - **The writer eases on battery.** It samples every 5 seconds on battery and
+    every 8 under 20% (every 3 on the charger, as before), so the gauge draws
+    less from a battery that is running down. The stale mark allows for the
+    longer interval.
+  - The full-screen view (`workload-gauge.py`) has a `PWR` line with the same
+    cell and the state in words.
+  - A Mac without a battery shows no cell. `CLAUDE_USAGE_BATTERY=0` leaves it
+    out, `CLAUDE_USAGE_PROGRESS_LIVE=0` holds it still,
+    `CLAUDE_USAGE_PROGRESS_ASCII=1` draws it in ASCII, and `NO_COLOR` is
+    honoured.
+  - 24 tests (`tests/test_battery.py`): every form of the power report, the
+    glyph's width at every level, the colours, the motion, and the intervals.
+
 ## [0.23.0] - 2026-09-28
 
 ### Changed

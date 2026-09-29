@@ -21,6 +21,8 @@ Signals, and where each comes from:
   net  MB/s  -- `netstat -w1 -c2` best-effort (skipped if unparseable)
   RAM        -- `memory_pressure` free%, `sysctl vm.swapusage` for swap
   load/cores -- `sysctl vm.loadavg` / `hw.ncpu`
+  battery    -- `pmset -g batt` (level, charging or not, time left); a Mac
+                without a battery simply shows none
 
 Two independent gauges, NOT a split that sums to 100 -- because "how pegged
 are the chips" and "how much data is flowing" are genuinely separate
@@ -193,6 +195,123 @@ def ncpu():
         return 0
 
 
+# ---- battery (0.24.0) -------------------------------------------------------
+# Read by the background writer with the rest of the sample, so a redraw never
+# shells out for it. `pmset -g batt` needs no sudo and answers in a few
+# milliseconds. Set CLAUDE_USAGE_BATTERY=0 to leave the battery out.
+BATTERY_CELLS = 4
+BATTERY_LOW = 20        # under this the cell turns red and pulses
+BATTERY_CRITICAL = 10   # under this it carries a warning mark as well
+_BATTERY_EIGHTHS = "▏▎▍▌▋▊▉"
+_BATTERY_STATES = {
+    "discharging": "discharging",
+    "charging": "charging",
+    "finishing charge": "charging",
+    "charged": "full",
+    "ac attached": "held",
+}
+
+
+def battery_enabled():
+    return os.environ.get("CLAUDE_USAGE_BATTERY", "1").strip() != "0"
+
+
+def battery_status(text=None):
+    """{"pct", "state", "minutes", "on_ac"} from `pmset -g batt`, or None on a
+    Mac without a battery (or when the report can't be read). `state` is one
+    of discharging / charging / full / held (plugged in, not charging);
+    `minutes` is pmset's own estimate, None while it has none."""
+    if text is None:
+        text = _run(["pmset", "-g", "batt"], timeout=3)
+    line = next((l for l in text.splitlines() if "InternalBattery" in l), None)
+    if line is None:
+        return None
+    level = re.search(r"(\d{1,3})%", line)
+    if level is None:
+        return None
+    on_ac = "'AC Power'" in text
+    parts = [p.strip() for p in line.split(";")]
+    raw = parts[1].lower() if len(parts) > 1 else ""
+    state = _BATTERY_STATES.get(raw, "held" if on_ac else "discharging")
+    left = re.search(r"(\d+):(\d{2}) remaining", line)
+    minutes = int(left.group(1)) * 60 + int(left.group(2)) if left else None
+    if state == "full" or (minutes == 0 and state != "discharging"):
+        minutes = None
+    return {"pct": max(0, min(100, int(level.group(1)))), "state": state,
+            "minutes": minutes, "on_ac": on_ac}
+
+
+def battery_interval(battery):
+    """How often the writer samples. On battery it eases, so the gauge itself
+    draws less from a battery that is running down; it never stops."""
+    if not battery or battery.get("state") != "discharging":
+        return WRITE_EVERY
+    return 8.0 if battery.get("pct", 100) < BATTERY_LOW else 5.0
+
+
+def battery_color(battery):
+    if battery["state"] in ("charging", "full", "held") and battery["pct"] >= BATTERY_LOW:
+        return GRN
+    pct = battery["pct"]
+    return RED if pct < BATTERY_LOW else YEL if pct < 50 else GRN
+
+
+def battery_cells(pct, cells=BATTERY_CELLS, rising=0, ascii_only=False):
+    """The inside of the battery glyph, `cells` wide. `rising` (0-7) lifts the
+    cell at the fill's edge by that many eighths: the charging motion."""
+    eighths = int(round(pct / 100 * cells * 8))
+    if pct > 0:
+        eighths = max(1, eighths)
+    if rising and eighths < cells * 8:
+        whole = eighths // 8
+        eighths = whole * 8 + (eighths % 8 + rising) % 8
+    full, part = divmod(min(eighths, cells * 8), 8)
+    if ascii_only:
+        filled = full + (1 if part >= 4 else 0)
+        return "#" * filled + "-" * (cells - filled)
+    body = "█" * full + (_BATTERY_EIGHTHS[part - 1] if part else "")
+    return body + " " * (cells - len(body))
+
+
+def fmt_minutes(minutes):
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
+def fmt_battery(battery, now_ts=None, color=True, ascii_only=False, live=True):
+    """The battery as one small cell of the status line, e.g. `▕█▎  ▏15% 0:26`.
+
+    Alive without being loud: while charging the fill's edge rises a step per
+    redraw; under BATTERY_LOW on battery the cell breathes between two reds.
+    Full or held on the charger it sits still. `live=False` draws every state
+    still, and NO_COLOR (or color=False) leaves the colour out."""
+    if not battery:
+        return ""
+    now_ts = time.time() if now_ts is None else now_ts
+    beat = int(now_ts // 2)
+    pct, state = battery["pct"], battery["state"]
+    charging = state == "charging"
+    low = state == "discharging" and pct < BATTERY_LOW
+    rising = beat % 8 if (charging and live) else 0
+    left, right = ("[", "]") if ascii_only else ("▕", "▏")
+    glyph = f"{left}{battery_cells(pct, rising=rising, ascii_only=ascii_only)}{right}"
+    text = f"{pct}%"
+    if charging:
+        text = ("+" if ascii_only else "⚡") + text
+    if battery.get("minutes") and state in ("discharging", "charging"):
+        text += " " + fmt_minutes(battery["minutes"])
+    if state == "discharging" and pct < BATTERY_CRITICAL:
+        text += " !" if ascii_only else " ⚠"
+    cell = f"{glyph}{text}"
+    if not color or os.environ.get("NO_COLOR", "") != "":
+        return cell
+    code = battery_color(battery)
+    if low and (not live or beat % 2 == 0):
+        code = "1;" + code
+    elif state in ("full", "held"):
+        code = DIM + ";" + code
+    return f"\033[{code}m{cell}\033[0m"
+
+
 def sample():
     user, sysu, idle, disk = cpu_and_disk()
     gpu, gpu_mem = gpu_util()
@@ -233,6 +352,7 @@ def sample():
         "disk_mbps": round(disk, 1), "net_mbps": round(net, 1),
         "ram_free_pct": free_pct, "swap_mb": swap_mb,
         "load": la, "cores": cores,
+        "battery": battery_status() if battery_enabled() else None,
         "top": [{"cpu": round(p, 0), "rss_mb": round(r, 0), "name": nm}
                 for p, r, nm in procs],
     }
@@ -297,6 +417,14 @@ def render(s):
     else:
         ram_line = c(DIM, ram_line)
     lines.append(ram_line)
+
+    if s.get("battery"):
+        b = s["battery"]
+        words = {"discharging": "on battery", "charging": "charging",
+                 "full": "charged", "held": "plugged in, not charging"}[b["state"]]
+        if b.get("minutes") and b["state"] in ("discharging", "charging"):
+            words += f" · {fmt_minutes(b['minutes'])} " + ("left" if b["state"] == "discharging" else "to full")
+        lines.append("  " + c(battery_color(b), f"PWR  {fmt_battery(b, color=False, live=False)}") + c(DIM, f"  {words}"))
 
     if s["top"]:
         lines.append("")
@@ -375,8 +503,10 @@ def watch_cache_loop():
     touch_keepalive()  # the spawner is about to render; count that as activity
     try:
         while keepalive_age() < IDLE_EXIT:
-            write_cache(sample())  # sample() itself costs ~1s
-            time.sleep(WRITE_EVERY)
+            reading = sample()  # sample() itself costs ~1s
+            every = battery_interval(reading.get("battery"))
+            write_cache(dict(reading, every=every))
+            time.sleep(every)
     finally:
         fcntl.flock(f, fcntl.LOCK_UN)
         f.close()
@@ -396,7 +526,8 @@ def segment():
 
     if d is None:
         return sc(DIM, "⚙ workload …")  # first render before the writer's first sample
-    if age is not None and age > STALE_AFTER:
+    stale_after = STALE_AFTER + max(0.0, float(d.get("every") or WRITE_EVERY) - WRITE_EVERY) * 2
+    if age is not None and age > stale_after:
         return sc(YEL, f"⚙ workload ⚠ stale ({int(age)}s)")
 
     glyph = {"compute": "⚙", "io": "⇄", "idle": "·", "mixed": "◐"}[d["class"]]
@@ -415,6 +546,10 @@ def segment():
     out = f"{glyph} compute {comp} io {io}{ram_seg} {sc(vcolor, '→ ' + verb)}"
     if (d.get("swap_mb") or 0) > 1024 or (d.get("ram_free_pct") or 100) < 20:
         out += "  " + sc(RED, "⚠swap")
+    if d.get("battery") and battery_enabled():
+        live = os.environ.get("CLAUDE_USAGE_PROGRESS_LIVE", "1").strip() != "0"
+        ascii_only = os.environ.get("CLAUDE_USAGE_PROGRESS_ASCII", "").strip() not in ("", "0")
+        out += "  " + fmt_battery(d["battery"], ascii_only=ascii_only, live=live)
     return out
 
 
