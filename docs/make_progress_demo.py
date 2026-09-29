@@ -63,7 +63,7 @@ def spans(line, theme):
     return out
 
 
-def frame(view, caption, size=15, width=1180):
+def frame(view, caption, pulse=None, size=15, width=1180):
     regular, pad, row = font(size), 18, size + 14
     image = Image.new("RGB", (width, pad * 2 + row * 4 + 10), (255, 255, 255))
     draw = ImageDraw.Draw(image)
@@ -75,7 +75,7 @@ def frame(view, caption, size=15, width=1180):
         draw.text((pad, y + 8), f"{caption}  ·  {theme} terminal", font=font(size - 3),
                   fill=THEMES[theme]["dim"])
         x = pad
-        for text, colour, bold in spans(uc.fmt_work_progress(view, columns=140), theme):
+        for text, colour, bold in spans(uc.fmt_work_progress(view, columns=140, live=True, pulse=pulse), theme):
             draw.text((x, y + 8 + row), text, font=regular, fill=colour,
                       stroke_width=1 if bold else 0, stroke_fill=colour)
             x += draw.textlength(text, font=regular)
@@ -98,15 +98,20 @@ def views():
             state["eta_at"], state["eta_set_at"] = t + eta * 60, t
         return uc.work_progress_view(uc.work_progress_normalize(state, "demo"),
                                      datetime.fromtimestamp(t, timezone.utc))
-    return [(at(1, {}, "building"), "set: four named steps, 1h 30m estimate"),
-            (at(24, {"build": 22}, "reviewing"), "a step finishes"),
-            (at(58, {"build": 22, "review": 51}, "migrating fixtures"), "halfway"),
-            (at(80, {"build": 22, "review": 51}, "migrating fixtures", quiet=21), "nothing has moved for 21 minutes"),
-            (at(102, {"build": 22, "review": 51, "test": 90, "ship": 102}, ""), "done")]
+    running = "live: the clock counts seconds, the fill creeps through the running step, the pulse turns"
+    return [(at(1, {}, "building"), "set: four named steps, 1h 30m estimate", "◐"),
+            (at(12, {}, "building"), running, "◓"),
+            (at(12 + 2 / 60, {}, "building"), running, "◑"),
+            (at(12 + 4 / 60, {}, "building"), running, "◒"),
+            (at(24, {"build": 22}, "reviewing"), "a step finishes", "◐"),
+            (at(58, {"build": 22, "review": 51}, "migrating fixtures"), "halfway", "◓"),
+            (at(80, {"build": 22, "review": 51}, "migrating fixtures", quiet=21),
+             "nothing has moved for 21 minutes: the pulse rests", "○"),
+            (at(102, {"build": 22, "review": 51, "test": 90, "ship": 102}, ""), "done", None)]
 
 
 def main():
-    frames = [frame(view, caption) for view, caption in views()]
+    frames = [frame(view, caption, pulse) for view, caption, pulse in views()]
     target = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "progress-demo.gif")
     if target.endswith(".png"):
         sheet = Image.new("RGB", (frames[0].width, sum(f.height + 6 for f in frames)), (255, 255, 255))
@@ -115,7 +120,9 @@ def main():
             sheet.paste(f, (0, y)); y += f.height + 6
         sheet.save(target)
     else:
-        frames[0].save(target, save_all=True, append_images=frames[1:], duration=2200, loop=0)
+        # The three live frames tick at the status line's own 2 second pace.
+        durations = [2200, 1000, 1000, 1000, 2200, 2200, 2200, 2200]
+        frames[0].save(target, save_all=True, append_images=frames[1:], duration=durations, loop=0)
     print("wrote", target)
 
 

@@ -4,8 +4,9 @@ against it, then the workload-gauge segment + resume command right-aligned
 against that.
 
 Claude Code allows only one statusLine command, so this wraps rather than
-replaces. It reads the Claude payload from stdin ONCE and forwards it verbatim
-to usage-statusline.py (which needs it for rate_limits/model), then appends the
+replaces. It reads the Claude payload from stdin ONCE and hands it verbatim
+to usage-statusline.py (which needs it for rate_limits/model; since 0.23.0 run
+in this same process, see quota_line()), then appends the
 workload segment. The workload part reads a cache instantly and never samples,
 so this wrapper adds no measurable latency to a render -- see
 workload-gauge.py's cache plumbing for how freshness is kept without lag.
@@ -48,6 +49,15 @@ A third line appears only while this session has a work progress bar set
 same line-gap cost is why it isn't there otherwise: a session with no bar
 pays one os.path.exists() for it and gets exactly the two lines above. It's
 drawn in-process like the ultracode indicator, so it adds no subprocess.
+Since 0.23.0 the row is live (clock in seconds, a fill creeping through the
+running step, a pulse while the session or its agents are writing); the
+payload's transcript_path is what lets the pulse see those writes.
+
+A redraw never waits on the week's transcript scan (0.23.0): the quota line
+reads the last finished scan and starts a fresh one detached when it is
+older than 20 seconds -- see scan_totals() in usage_common.py. Before that,
+the scan ran inside every redraw and hit its 5 second limit, so the status
+line took over 5 seconds to draw and Claude Code cancelled most redraws.
 
 If any piece errors, its line/segment is simply omitted rather than breaking
 the whole statusline.
@@ -81,12 +91,28 @@ load_env_file()  # the uc cost knobs live in the env file; subprocesses load it 
 payload = sys.stdin.read()  # read once; the quota line consumes it, everything else doesn't
 
 
-def run(cmd, stdin_text=None):
+def start(cmd, stdin_text=None):
+    """Starts a piece of the bar without waiting for it (0.23.0)."""
     try:
-        r = subprocess.run(cmd, input=stdin_text, capture_output=True,
-                           text=True, timeout=10)
-        return r.stdout.rstrip("\n")
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        return proc, stdin_text
     except Exception:
+        return None, None
+
+
+def finish(started):
+    proc, stdin_text = started
+    if proc is None:
+        return ""
+    try:
+        out, _ = proc.communicate(input=stdin_text, timeout=10)
+        return out.rstrip("\n")
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
         return ""
 
 
@@ -100,7 +126,33 @@ transcript_path = parsed.get("transcript_path")
 # --no-uc-segment: the ultracode indicator renders on the workload line
 # below instead (styled, next to the swap marker -- per Rajan, 2026-08-08),
 # so the quota line doesn't carry it twice.
-usage_line = run([sys.executable, USAGE, "--no-uc-segment"], stdin_text=payload)
+def quota_line(payload_text):
+    """usage-statusline.py's line, drawn in this process (0.23.0): it no
+    longer waits on anything slow (the transcript count runs detached, see
+    scan_totals()), so a separate interpreter only added its start-up time
+    to every redraw. Loaded from its file, with its own argv, stdin and
+    stdout for the length of the call; any error gives an empty line."""
+    import importlib.util
+    import io
+    saved = sys.argv, sys.stdin, sys.stdout
+    try:
+        sys.argv = [USAGE, "--no-uc-segment"]
+        sys.stdin, sys.stdout = io.StringIO(payload_text), io.StringIO()
+        spec = importlib.util.spec_from_file_location("usage_statusline", USAGE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.main()
+        return sys.stdout.getvalue().rstrip("\n")
+    except BaseException:
+        return ""
+    finally:
+        sys.argv, sys.stdin, sys.stdout = saved
+
+
+# The workload segment is its own process; it starts first and draws while
+# the quota line is worked out here, so a redraw costs the slower of the two.
+wgauge_proc = start([sys.executable, WGAUGE, "--segment"])
+usage_line = quota_line(payload)
 
 chip = ""
 try:
@@ -116,7 +168,7 @@ lines = []
 if usage_line or chip:
     lines.append(right_align(usage_line, chip))
 
-seg = run([sys.executable, WGAUGE, "--segment"])
+seg = finish(wgauge_proc)
 
 # Ultracode indicator, at the end of the workload segment next to the swap
 # marker. The quota subprocess above already wrote this render's fresh cache
@@ -137,7 +189,7 @@ if seg or resume:
 
 # Work progress bar: its own last line, only while this session has one set.
 try:
-    progress = work_progress_line(session_id, datetime.now(timezone.utc))
+    progress = work_progress_line(session_id, datetime.now(timezone.utc), transcript_path)
 except Exception:
     progress = ""
 if progress:

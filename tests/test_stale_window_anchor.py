@@ -57,6 +57,10 @@ def run_script(script, home, args=None, payload=None):
     env["USERPROFILE"] = home
     env["PYTHONUTF8"] = "1"
     env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
+    # Count in the call (0.23.0): a redraw otherwise reads the last finished
+    # scan and starts a new one detached, and these tests pin the arithmetic
+    # of the estimate, not the scheduling (tests/test_live_progress.py does).
+    env["CLAUDE_USAGE_SCAN_WAIT"] = "1"
     return subprocess.run(
         [sys.executable, script] + (args or []),
         input=json.dumps(payload) if payload is not None else "",

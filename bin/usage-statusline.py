@@ -41,7 +41,7 @@ import sys, os, json
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from usage_common import pending_tasks_count, fmt_window, fmt_prompt_cache, load_env_file, version_lt, fable_estimate, fmt_model, fable_stale_elapsed, _cap_max_age, fmt_ultracode, ultracode_readiness, ultracode_state  # noqa: E402
+from usage_common import pending_tasks_count, fmt_window, fmt_prompt_cache, load_env_file, version_lt, fable_estimate, fmt_model, fable_stale_elapsed, _cap_max_age, fmt_ultracode, ultracode_readiness, ultracode_state, SCAN_AGE_SHOWN_S, fmt_span_short  # noqa: E402
 
 load_env_file()
 
@@ -209,7 +209,11 @@ def main():
     fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
     if fable:
         cache["fable_tracked_model"] = fable["tracked_model"]
-        cache["fable_stale"] = fable["stale"]
+        counting = bool(fable.get("counting"))
+        if not counting:
+            # No finished scan of this window yet says nothing either way
+            # about staleness, so the flag the hooks read keeps its value.
+            cache["fable_stale"] = fable["stale"]
         elapsed = None
         past_grace = None
         if fable["stale"]:
@@ -256,8 +260,23 @@ def main():
                 parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], cache.get("fable_resets_at"), now, note="refreshes next msg!"))
             else:
                 parts.append(f"{fable['tracked_model']}: stale, run /gauge-calibrate")
+        elif counting:
+            # The first scan of this window is still running (a fresh
+            # install, or the first seconds of a new week). The last number
+            # shown for this same window is still the best known one.
+            if "fable_pct" in cache and cache.get("fable_resets_at") == fable["resets_at"]:
+                parts.append(fmt_window(fable["tracked_model"], cache["fable_pct"], fable["resets_at"], now, note="counting…"))
+            else:
+                parts.append(f"{fable['tracked_model']}: counting…")
         else:
-            parts.append(fmt_window(fable["tracked_model"], fable["pct"], fable["resets_at"], now))
+            # Projected from the last finished scan (see scan_totals()); its
+            # age is named only once it is old enough to matter.
+            age_note = None
+            if fable.get("scanned_at") is not None:
+                age = now.timestamp() - fable["scanned_at"]
+                if age > SCAN_AGE_SHOWN_S:
+                    age_note = f"counted {fmt_span_short(age)} ago"
+            parts.append(fmt_window(fable["tracked_model"], fable["pct"], fable["resets_at"], now, note=age_note))
             cache["fable_pct"] = fable["pct"]
             cache["fable_resets_at"] = fable["resets_at"]
             # Resolved -- clear any stale-episode clock so a future episode
@@ -279,11 +298,16 @@ def main():
         # and `stale_past_grace` true -> the elapsed-hours call to action.
         # `pct` being null in either stale case is the "no cached % at all"
         # sub-variant.
+        shown_pct = cache.get("fable_pct") if fable["stale"] else fable["pct"]
+        if counting:
+            shown_pct = cache.get("fable_pct") if cache.get("fable_resets_at") == fable["resets_at"] else None
         data["tracked_model"] = {
             "name": fable["tracked_model"],
             "stale": fable["stale"],
-            "pct": fable["pct"] if not fable["stale"] else cache.get("fable_pct"),
+            "pct": shown_pct,
             "resets_at": fable["resets_at"] if not fable["stale"] else cache.get("fable_resets_at"),
+            "counting": counting,
+            "scanned_at": fable.get("scanned_at"),
             "stale_elapsed_hours": round(elapsed.total_seconds() / 3600, 2) if fable["stale"] else None,
             "stale_past_grace": past_grace if fable["stale"] else None,
         }

@@ -397,18 +397,20 @@ it at the end; the line exists only while a bar is set.
 ![the work progress line through a task, each frame on a light terminal and a dark one: set with four named steps and a 1h 30m estimate, a step finishing, halfway, an amber "quiet 21m" mark after nothing has moved, and the green "done in 1h 42m"](docs/progress-demo.gif)
 
 ```
-release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~35m left · migrating fixtures
+release 2.4 ████████▒▒░░░░░░ 50% · 2/4 ▸ test ◑ · 42m 07s in · ~35m left · migrating fixtures
 ```
 
 | Piece | Meaning |
 | --- | --- |
 | `release 2.4` | The label the task was given |
 | bar, `50%` | Steps finished out of the total. The fill moves in eighths of a cell, so a long count advances smoothly |
+| `▒▒` | The step in progress, filling in a second texture of the same colour as time is spent on it — see [Live while the work runs](#live-while-the-work-runs) |
 | `2/4 ▸ test` | 2 of 4 steps done; `test` is the one in progress (named steps only) |
-| `42m in` | Time since the bar was set |
+| `◑` | Turns on every redraw while the session or its agents are writing; rests as `○` when nothing has been written for a minute |
+| `42m 07s in` | Time since the bar was set, to the second |
 | `~35m left` | Approximate time left — see below. `finishing` at the very end; `past estimate` when the stated time has passed before any step finished to measure a pace |
 | `⚠ quiet 25m` | Yellow: nothing has updated the bar for 25 minutes. This is how a stalled run shows |
-| last, dimmed | The latest note, trimmed to fit the terminal |
+| last | The latest note, trimmed to fit the terminal |
 
 When the last step finishes, the line turns green and reads
 `✓ done in 1h 42m` for 30 minutes, then hides. A bar nobody has touched for
@@ -473,6 +475,47 @@ under 10 minutes, 5 minutes under an hour, 10 minutes beyond — never goes
 below zero, and reads `finishing` under 90 seconds. The `~` is there
 because it is an estimate.
 
+### Live while the work runs
+
+Between one finished step and the next, the row keeps moving so you can
+watch the work instead of waiting for it. Every live piece shows only what
+really happened:
+
+- **The clock counts seconds** (`42m 07s in`), so each redraw moves it.
+- **The fill creeps through the step in progress.** From the end of the
+  finished steps, a second texture in the same colour (`▒`, or `=` in ASCII
+  mode) grows with the time spent on the current step, measured against
+  what a step is expected to take: the measured pace, or else the stated
+  estimate shared over the steps left. It stops at nine tenths of the step,
+  so it never reaches the next step's mark — only a finished step moves
+  the bar there. The percentage and the `2/4` count still count finished
+  steps only. With no pace and no estimate there is nothing to measure
+  against, and nothing creeps.
+- **A pulse beside the step's name** (`◐ ◓ ◑ ◒`, or `| / - \` in ASCII mode)
+  turns on every redraw while something was written in the last minute:
+  the session's own transcript, a transcript of one of its agents, or a
+  file in its tasks folder. When nothing has been written for a minute it
+  rests as `○` (`.` in ASCII mode). The paths come from the status line's
+  own input, and the check reads a handful of file times, never a walk of
+  the whole projects folder.
+- **The time left counts down** with the clock, as before.
+
+When the terminal is narrow, the note is trimmed first, then the clock
+drops its seconds, then the note goes, then the elapsed time.
+`CLAUDE_USAGE_PROGRESS_LIVE=0` turns all of this off and draws the row
+exactly as 0.22.1 did.
+
+**The status line's timer.** Claude Code redraws the status line when the
+conversation changes and, with `refreshInterval`, on a timer as well; the
+timer is what keeps the row moving while a long step runs quietly.
+`install.sh` sets it to 2 seconds:
+
+```json
+"statusLine": { "type": "command", "command": "python3 ~/.claude/scripts/statusline.py", "refreshInterval": 2 }
+```
+
+**What the timer costs.** Measured on the machine this was built on (Apple silicon, Python 3.14, a week of about 1.2 GB of transcripts): one redraw of the whole status line takes about 70 ms of wall time and about 77 ms of processor time across its two small Python processes. At one redraw every 2 seconds that is 30 redraws a minute, about 2.3 seconds of processor time a minute, or roughly 4% of one core, for each open session while it sits idle; redraws Claude Code makes for conversation updates come on top. If that is more than you want, a longer `refreshInterval` keeps everything working and only moves the row less often between updates.
+
 ### Having sessions keep it current
 
 The bar is only as good as its updates. To have sessions use it on their
@@ -506,8 +549,8 @@ a 256-colour number), and `NO_COLOR` removes colour altogether.
 `CLAUDE_USAGE_PROGRESS_ASCII=1` (or `--ascii`) draws `[####----]` for
 terminals without block characters. The bar is a tenth of the terminal's
 width (8 to 20 cells) unless `CLAUDE_USAGE_PROGRESS_WIDTH` or `--width`
-sets it, and the line trims its note, then drops the elapsed time, rather
-than wrap.
+sets it, and the line trims its note, then drops the clock's seconds, then
+the note, then the elapsed time, rather than wrap.
 
 ## Configuration
 
@@ -619,6 +662,20 @@ that one gap with a local, cost-weighted projection: one real read off the
 settings page derives a weekly $ cap (`bin/usage-calibrate-fable.py`), and
 `bin/tokens-since.py` then projects live local usage against that fixed cap
 on every render — no browser automation running in the background.
+
+**The count never slows the status line.** A week of transcripts can run
+past a gigabyte, so the redraw doesn't count them itself: it reads the
+totals of the last finished count and returns at once. When those are more
+than 20 seconds old it starts one fresh count in the background (one at a
+time, under a lock file) and doesn't wait for it. The count is
+incremental: `tokens-since.py` remembers, per transcript file, how far it
+has read, and reads only what was added since, so a refresh usually takes
+a fraction of a second. A count that is late or has failed doesn't make the
+estimate stale; it keeps projecting from the last finished one, and the bar
+names the count's age (`counted 7m ago`) only once it is over five minutes
+old. In the first seconds of a new week, before any count of it has
+finished, the row reads `counting…`. `CLAUDE_USAGE_SCAN_WAIT=1` makes a
+redraw count in place instead, for scripts that need the exact figure.
 
 **Know its real limitation:** the projection only sees usage of the tracked
 model through *this* Claude Code CLI. It's blind to that model used via

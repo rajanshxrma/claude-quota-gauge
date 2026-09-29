@@ -37,7 +37,11 @@ def progress_env(home, extra=None):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith("CLAUDE_USAGE") and k not in STRIPPED}
     env.update({"HOME": home, "USERPROFILE": home, "PYTHONUTF8": "1", "COLUMNS": "200",
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                # These tests pin the 0.22.1 row; the live parts (0.23.0) are
+                # switched off here and tested in tests/test_live_progress.py,
+                # which also checks the switch-off row byte for byte.
+                "CLAUDE_USAGE_PROGRESS_LIVE": "0"})
     env.update(extra or {})
     return env
 
@@ -417,6 +421,9 @@ class JsonShapeTest(ProgressHome):
         "pace_s_per_step": int, "pace_left_s": int, "quiet": bool, "quiet_s": int,
         "quiet_after_s": int, "finished": bool, "visible": bool,
         "hidden_reason": type(None), "segment": str,
+        # 0.23.0, for the live row: where the running step began, what a
+        # step is expected to take, and how far into it the work is (0-0.9).
+        "step_started_at": str, "step_expected_s": int, "creep": float,
     }
 
     def test_status_json_has_a_stable_shape(self):
@@ -457,7 +464,9 @@ class StatuslineRowTest(ProgressHome):
         for name in ("statusline.py", "usage_common.py", "work-progress.py"):
             shutil.copy2(os.path.join(BIN, name), self.app)
         with open(os.path.join(self.app, "usage-statusline.py"), "w") as f:
-            f.write("import sys\nsys.stdin.read()\nprint('quota line')\n")
+            # statusline.py draws this line in its own process (0.23.0), so
+            # the stub is a module with a main(), like the real script.
+            f.write("import sys\ndef main():\n    sys.stdin.read()\n    print('quota line')\n")
         with open(os.path.join(self.app, "workload-gauge.py"), "w") as f:
             f.write("print('workload line')\n")
 

@@ -106,7 +106,10 @@ def main():
     # calibrated_at so it renotifies once per stale calibration, then again
     # after the next /gauge-calibrate.
     now = datetime.datetime.now(datetime.timezone.utc)
-    fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
+    # The watcher runs in the background with time to spare, so it counts in
+    # this call (incrementally, see tokens-since.py) rather than reading the
+    # last redraw's scan.
+    fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"), wait=True)
     if fable and fable.get("stale"):
         cal_marker = None
         if os.path.exists(FABLE_CAL_PATH):

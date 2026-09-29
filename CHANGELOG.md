@@ -4,6 +4,74 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.23.0] - 2026-09-28
+
+### Changed
+- **The status line redraws in milliseconds.** The tracked-model estimate
+  used to count the week's transcripts inside every redraw, with a 5 second
+  limit. At a real week's size (more than a gigabyte) the count needed
+  longer, so each redraw took just over 5 seconds and then marked the
+  estimate stale; Claude Code cancels a redraw still running when the next
+  one is due, so while a session worked the status line rarely finished
+  drawing at all. A redraw now reads the totals of the last finished count
+  and returns: on the owner's machine one redraw went from 5,124 ms (median) and 5,135 ms (worst) to 65 ms and 80 ms (20 runs each; the new figures taken while an Xcode build ran, load average 23). Two smaller savings help: the quota line is drawn inside the status line's own process instead of a second interpreter, with the workload segment's process drawing beside it, and `usage_common.py` imports `hashlib` and `statistics` only where they are used.
+  - **The count is incremental.** `tokens-since.py` keeps a record per
+    transcript file (size, modification time, inode, the byte offset
+    counted so far and the totals up to it) and reads only what was
+    appended. A file that shrank, changed inode or was rewritten in place
+    is counted again from zero; a vanished file drops out; a line still
+    being written waits for the next count; a file last modified a day
+    before the window began is not opened. The record and the totals are
+    written by temporary file and rename, so several sessions counting at
+    once leave a whole, consistent record. On the owner's machine the first
+    count of the week went from 6.9 s to 1.6 s and a refresh takes 0.04 s,
+    with identical totals.
+  - **Counting happens in the background.** When the last finished count is
+    more than 20 seconds old, the redraw starts one count detached, at low
+    priority, under a lock file holding the counter's pid and start time (a
+    lock older than 2 minutes is taken over), and does not wait for it.
+  - **A late count is not staleness.** The estimate keeps projecting from
+    the last finished count; the bar names its age (`counted 7m ago`) only
+    past five minutes, since refreshes start every 20 seconds and finish in
+    well under one, so anything younger is the normal rhythm. Before the
+    first count of a new week finishes the row reads `counting…`. Real
+    staleness keeps its meaning and its wording, and the anchor model, the
+    calibration file and the hooks are unchanged. The `UserPromptSubmit`
+    staleness hook reads the same totals, so it no longer counts on every
+    prompt either; the background watcher still counts in its own run.
+- **`install.sh` sets the status line's `refreshInterval` to 2 seconds**
+  (was 60), and moves an existing install from our old 60 to 2; any other
+  value is left alone. Measured cost per open session: about 77 ms of processor time per redraw (70 ms of wall time) times 30 redraws a minute, about 2.3 s a minute or roughly 4% of one core while the session sits idle.
+
+### Added
+- **The work progress row is live.** Everything on it shows only what
+  really happened:
+  - the clock counts seconds (`42m 07s in`);
+  - the fill creeps through the step in progress in a second texture of the
+    same colour (`▒`, `=` in ASCII mode), growing with the time spent on it
+    against the measured pace, or else the stated estimate shared over the
+    steps left; it stops at nine tenths of the step and never reaches the
+    next step's mark, and the percentage and count still count finished
+    steps only;
+  - a pulse beside the step's name (`◐◓◑◒`, `|/-\` in ASCII mode) turns on
+    every redraw while the session's transcript, one of its agents'
+    transcripts or a file in its tasks folder was written in the last
+    minute, and rests as `○` (`.`) otherwise;
+  - the time left counts down with the clock, as before.
+  When the terminal is narrow the note is trimmed first, then the seconds
+  go, then the note, then the elapsed time. `CLAUDE_USAGE_PROGRESS_LIVE=0`
+  draws the row exactly as 0.22.1 did.
+- `CLAUDE_USAGE_SCAN_WAIT=1` makes a redraw count in place, for scripts that
+  need the exact figure at that moment.
+- `tests/test_live_progress.py`: 26 tests (140 in all): the incremental count (append, a line still being written, shrink, replaced file, new and vanished files, entries before the window, two counters at once, many rounds against a count from nothing, the lock), the redraw returning while a count runs and starting only one, a late count still projecting and naming its age past five minutes, the creep's cap across bar shapes, the pulse resting and moving, ASCII glyphs, the seconds going before the note, and the switch off drawing 0.22.1's row byte for byte against 124 rows recorded from 0.22.1.
+
+### Fixed
+- The manual-setup hint in `install.sh` named `usage-statusline.py` as the
+  status line command; it now names `statusline.py`, the combined bar the
+  installer itself sets.
+- The README's table for the progress row still called the note dimmed;
+  since 0.22.1 nothing on the row is dimmed.
+
 ## [0.22.1] - 2026-09-27
 
 ### Changed

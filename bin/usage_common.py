@@ -1,6 +1,8 @@
 """Shared helpers for the statusline renderer, the SessionStart hook, and the
 background watcher."""
-import hashlib, json, os, re, statistics, subprocess, sys
+import json, os, re, subprocess, sys
+# hashlib and statistics are imported where they are used: together they are
+# about half of this module's import time, and every redraw imports it.
 from datetime import datetime, timedelta, timezone
 
 FABLE_CAL_PATH = os.path.expanduser("~/.claude/scripts/usage-fable-calibration.json")
@@ -113,7 +115,105 @@ def version_lt(a, b):
     return a_parts < b_parts
 
 
-def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
+# The transcript scan behind fable_estimate() (0.23.0). A redraw never
+# waits on it: it reads the last finished scan's totals and, when those are
+# older than SCAN_REFRESH_S, starts ONE scan detached (tokens-since.py
+# --background, under a lock file holding the scanner's pid and start time;
+# a lock older than 2 minutes is taken over). The scan is incremental, so a
+# refresh normally reads only what was appended in the last few seconds.
+SCAN_REFRESH_S = 20
+# The scan's age is shown on the bar only past this. Refreshes are started
+# every SCAN_REFRESH_S and an incremental one finishes in well under a
+# second, so a scan five minutes old means several refreshes in a row have
+# failed to finish -- worth saying. Anything younger is the normal rhythm,
+# and at a heavy session's pace a few minutes of lag moves the estimate by
+# well under a point, so showing it would only be noise.
+SCAN_AGE_SHOWN_S = 300
+SCAN_WAIT_TIMEOUT_S = 120
+
+
+def _scan_scripts_dir():
+    return os.path.expanduser("~/.claude/scripts")
+
+
+def _scan_wait_default():
+    return os.environ.get("CLAUDE_USAGE_SCAN_WAIT", "").strip() not in ("", "0")
+
+
+def _kick_scan(start):
+    """Starts one detached background scan unless one is already running.
+    The lock is taken here, before the spawn, so two redraws landing at the
+    same moment start one scanner, not two. Never raises, never waits."""
+    lock = os.path.join(_scan_scripts_dir(), "tokens-since.lock")
+    now_ts = datetime.now(timezone.utc).timestamp()
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        try:
+            if now_ts - os.stat(lock).st_mtime < 120:
+                return False
+            os.unlink(lock)
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except OSError:
+            return False
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"pid": os.getpid(), "started_at": now_ts}))
+        subprocess.Popen(
+            [sys.executable, TOKENS_SINCE, "--background", "--lock-held", start],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True, start_new_session=True,
+        )
+        return True
+    except Exception:
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
+        return False
+
+
+def scan_totals(start, now=None, wait=None):
+    """(totals, scanned_at) for window `start` from the last finished scan,
+    or (None, None) when none has finished yet. With wait (default
+    CLAUDE_USAGE_SCAN_WAIT) the scan runs in this call first; without it a
+    scan older than SCAN_REFRESH_S is started detached and never waited on."""
+    if wait is None:
+        wait = _scan_wait_default()
+    if wait:
+        try:
+            totals = json.loads(subprocess.check_output(
+                [sys.executable, TOKENS_SINCE, start], stderr=subprocess.DEVNULL,
+                timeout=SCAN_WAIT_TIMEOUT_S))
+            if isinstance(totals, dict):
+                return totals, datetime.now(timezone.utc).timestamp()
+        except Exception:
+            pass
+    now_ts = (now or datetime.now(timezone.utc)).timestamp()
+    entry = None
+    try:
+        with open(os.path.join(_scan_scripts_dir(), "tokens-since-totals.json")) as f:
+            entry = json.load(f)["starts"][start]
+        totals, scanned_at = entry["totals"], float(entry["scanned_at"])
+        if not isinstance(totals, dict):
+            raise ValueError("totals")
+    except Exception:
+        totals, scanned_at = None, None
+    if not wait and (scanned_at is None or now_ts - scanned_at > SCAN_REFRESH_S):
+        _kick_scan(start)
+    return totals, scanned_at
+
+
+def _counting(tracked_model, next_reset):
+    """No scan of this window has finished yet: nothing to project from,
+    which is not the same as stale (see fable_estimate())."""
+    return {"tracked_model": tracked_model, "stale": False, "counting": True,
+            "pct": None, "resets_at": int(next_reset.timestamp()), "scanned_at": None}
+
+
+def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None, wait=None):
     """Returns the live weekly % for the per-model pool Anthropic's real
     rate_limits field doesn't break out (default: Fable) -- projected from a
     weekly $ cap derived at the last real calibration against
@@ -124,15 +224,21 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     must never present it as fact when stale. Returns None if it's never
     been calibrated at all.
 
-    Both tokens-since.py subprocess calls below carry an explicit timeout
-    (found live, 2026-07-29): tokens-since.py glob-scans every local
-    session transcript, and under real disk contention that scan can run
-    long enough to blow past the *caller's* subprocess timeout ten steps up
-    the chain (statusline.py's run(), timeout=10) -- which kills the whole
-    usage-statusline.py process, not just this fable segment, dropping the
-    entire quota line off the bar. A tight bound here (well under that
-    outer 10s) means a slow scan degrades to "stale" for this one segment
-    instead of taking the rest of the line down with it.
+    The local usage comes from the last FINISHED transcript scan, read from
+    tokens-since.py's totals file (0.23.0; see scan_totals()). Until then
+    the scan ran inside this call with a 5 second limit, and at a real
+    week's size it needed longer, so every redraw waited the full 5 seconds
+    and then reported "stale" -- and Claude Code, which cancels a redraw
+    still running when the next one is due, rarely got to draw at all. Now
+    a scan older than SCAN_REFRESH_S is started detached and this call
+    returns at once with the last finished one. A late or failed scan is
+    not staleness: the estimate keeps projecting from the last finished
+    scan, and `scanned_at` says how old it is. Only when no scan of this
+    window has ever finished (a fresh install, the first seconds of a new
+    week) is there nothing to project from; that comes back as
+    `counting: True`, never as `stale`. `wait=True` (or
+    CLAUDE_USAGE_SCAN_WAIT=1) counts in this call instead, for callers
+    that have time: the background watcher and tests.
 
     Unlike the 5h/weekly-all numbers (which come free from rate_limits on
     every render), this needs the cap to have been derived at least once
@@ -238,16 +344,10 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
         # cap from a real non-zero read. Without this check, the friendly
         # 0% would sit frozen while real usage climbed -- the same freeze
         # bug this model was built to kill, in friendlier clothes.
-        try:
-            tokens = json.loads(
-                subprocess.check_output(
-                    [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL,
-                    timeout=5,
-                )
-            )
-            tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
-        except Exception:
-            return {"tracked_model": tracked_model, "stale": True}
+        tokens, scanned_at = scan_totals(window_start.isoformat(), now, wait=wait)
+        if tokens is None:
+            return _counting(tracked_model, next_reset)
+        tracked_now = sum(v for k, v in tokens.items() if tracked_model.lower() in k.lower())
         if not rolled_over and tracked_now > cal.get("tokens_at_cal", 0):
             return {"tracked_model": tracked_model, "stale": True}
         if rolled_over and tracked_now > 0:
@@ -257,6 +357,7 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
             "stale": False,
             "pct": 0 if rolled_over else cal.get("pct", 0),
             "resets_at": int(next_reset.timestamp()),
+            "scanned_at": scanned_at,
         }
 
     try:
@@ -266,15 +367,9 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
     if now - cap_derived_at > _cap_max_age():
         return {"tracked_model": tracked_model, "stale": True}
 
-    try:
-        tokens = json.loads(
-            subprocess.check_output(
-                [sys.executable, TOKENS_SINCE, window_start.isoformat()], stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-        )
-    except Exception:
-        return {"tracked_model": tracked_model, "stale": True}
+    tokens, scanned_at = scan_totals(window_start.isoformat(), now, wait=wait)
+    if tokens is None:
+        return _counting(tracked_model, next_reset)
 
     # The drift tripwire, sharpened (v0.8.3): a raw |agg_now - agg_at_cal|
     # threshold conflates two very different things -- aggregate movement
@@ -336,6 +431,7 @@ def fable_estimate(now, current_resets_at=None, current_seven_day_pct=None):
         "stale": False,
         "pct": min(pct, 150),
         "resets_at": int(next_reset.timestamp()),
+        "scanned_at": scanned_at,
     }
 
 
@@ -485,6 +581,8 @@ def fable_stale_to_announce(session_id, now):
         return None
 
     fable = fable_estimate(now, cache.get("seven_day_resets_at"), cache.get("seven_day_pct"))
+    if fable and fable.get("counting"):
+        return None  # nothing known yet either way; leave the dedup state alone
     state = _load_fable_stale_state()
 
     if not fable or not fable.get("stale"):
@@ -690,6 +788,7 @@ def ultracode_observed_cost(label, min_samples=3, max_samples=10):
 
     if len(deltas) < min_samples:
         return None
+    import statistics
     return statistics.median(deltas)
 
 
@@ -1720,6 +1819,7 @@ def _session_color(session_id):
     point: telling several concurrent sessions apart at a glance."""
     if not session_id:
         return _TITLE_PALETTE[0]
+    import hashlib
     digest = hashlib.sha256(session_id.encode()).digest()
     return _TITLE_PALETTE[digest[0] % len(_TITLE_PALETTE)]
 
@@ -1769,6 +1869,11 @@ _WP_MAX_BYTES = 65536  # a real state file is well under 1 KB
 _WP_SESSION_RE = re.compile(r"[^A-Za-z0-9_-]")
 _WP_EIGHTHS = "▏▎▍▌▋▊▉"  # sub-cell fill, so a long bar moves smoothly
 _WP_MIN_PACE_SPAN = 60  # seconds; steps ticked off right after `set` measure nothing
+WP_CREEP_CAP = 0.9  # the creeping fill stops at nine tenths of the running step
+WP_PULSE_WINDOW_S = 60  # the pulse moves only if something was written this recently
+_WP_PULSE = ("◐◓◑◒", "○")  # frames while work is moving, and the still glyph
+_WP_PULSE_ASCII = ("|/-\\", ".")
+_WP_CREEP_GLYPH = ("▒", "=")  # a second texture in the same hue, never dimmed
 
 
 def _env_float(name, default):
@@ -1951,6 +2056,22 @@ def work_progress_view(state, now):
     def secs(value):
         return int(round(value)) if value is not None else None
 
+    # The running step (0.23.0): how far into it the work is, against what
+    # a step is expected to take -- the measured pace, else the stated
+    # estimate as it stood when the step began, shared over the steps left.
+    # Capped at WP_CREEP_CAP of one step, so the creeping fill can never
+    # reach the next step's mark: only a finished step moves the bar there.
+    creep = 0.0
+    step_started = expected = None
+    if not finished:
+        step_started = max(started, state["last_done_at"] or started)
+        if pace is not None:
+            expected = pace
+        elif state["eta_at"] is not None and state["eta_at"] > step_started:
+            expected = (state["eta_at"] - step_started) / max(1, total - done)
+        if expected:
+            creep = min(WP_CREEP_CAP, max(0.0, now_ts - step_started) / expected)
+
     steps = [{"name": n, "done": n in state["finished"],
               "finished_at": iso(state["finished"].get(n))} for n in state["steps"]]
     return {
@@ -1969,6 +2090,8 @@ def work_progress_view(state, now):
         "quiet_s": secs(since_update), "quiet_after_s": secs(quiet_after),
         "finished": finished,
         "visible": hidden is None, "hidden_reason": hidden,
+        "step_started_at": iso(step_started), "step_expected_s": secs(expected),
+        "creep": round(creep, 4),
     }
 
 
@@ -2010,6 +2133,16 @@ def fmt_span(seconds):
     if hours:
         return f"{hours}h {mins}m" if mins else f"{hours}h"
     return f"{mins}m"
+
+
+def fmt_span_short(seconds):
+    """A past duration for a note, e.g. '7m', '2h', '3d'."""
+    seconds = max(0, int(seconds or 0))
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
 
 
 def fmt_span_approx(seconds):
@@ -2085,16 +2218,49 @@ def work_progress_appearance():
     return value if value in ("light", "dark") else None
 
 
-def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=None):
+def work_progress_live():
+    """The live parts of the row (0.23.0): the clock in seconds, the fill
+    creeping inside the running step, and the pulse. On unless
+    CLAUDE_USAGE_PROGRESS_LIVE=0, which draws the row exactly as 0.22.1."""
+    return os.environ.get("CLAUDE_USAGE_PROGRESS_LIVE", "1").strip() != "0"
+
+
+def fmt_span_clock(seconds):
+    """Elapsed time to the second, e.g. '42s', '37m 05s', '1h 5m 07s'; a
+    day or more falls back to fmt_span()."""
+    seconds = max(0, int(seconds or 0))
+    if seconds >= 86400:
+        return fmt_span(seconds)
+    hours, rest = divmod(seconds, 3600)
+    mins, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {mins}m {secs:02d}s"
+    if mins:
+        return f"{mins}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=None,
+                      live=None, pulse=None):
     """One status-line row for a bar, e.g.
-    'release 2.4 ████████░░░░░░░░ 50% · 2/4 ▸ test · 42m in · ~40m left · note'
+    'release 2.4 ████████▒░░░░░░░ 50% · 2/4 ▸ test ◐ · 42m 05s in · ~40m left · note'
     -- green with '✓ done in 1h 42m' once the last step finishes, and a
     yellow '⚠ quiet 25m' while nothing has updated it past the quiet
     threshold. Sized to the terminal (`columns`, default the live width)
-    so it never wraps: the note is trimmed first, then dropped, then the
-    elapsed time goes."""
+    so it never wraps: the note is trimmed first, then the clock's seconds
+    go, then the note is dropped, then the elapsed time goes.
+
+    Live (see work_progress_live()): the clock counts seconds, the fill
+    creeps in a second texture of the same hue through the running step
+    (view["creep"], never past nine tenths of it; the percentage and the
+    count stay counted from finished steps only), and `pulse` -- a glyph
+    the caller chose from real activity, see work_progress_pulse() -- sits
+    beside the running step's name. With live off none of the three is
+    drawn and the row is byte for byte the 0.22.1 row."""
     if columns is None:
         columns = _live_columns()
+    if live is None:
+        live = work_progress_live()
 
     def paint(code, text):
         return f"\033[{code}m{text}\033[0m" if color and code and text else text
@@ -2105,14 +2271,23 @@ def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=No
     cells = _wp_bar_cells(width, columns)
     frac = view["done"] / view["total"]
     fill = "32" if view["finished"] else hue
+    creep = 0.0
+    if live and not view["finished"]:
+        creep = min(WP_CREEP_CAP, max(0.0, float(view.get("creep") or 0.0)))
+    creep_end = (view["done"] + creep) / view["total"] * cells
     if ascii_only:
         filled = int(frac * cells + 1e-9)
+        crept = max(0, int(creep_end + 1e-9) - filled) if creep else 0
         bar = (paint(detail, "[") + paint(fill, "#" * filled)
-               + paint(empty, "-" * (cells - filled)) + paint(detail, "]"))
+               + (paint(fill, _WP_CREEP_GLYPH[1] * crept) if crept else "")
+               + paint(empty, "-" * (cells - filled - crept)) + paint(detail, "]"))
     else:
         full, part = divmod(int(frac * cells * 8 + 1e-9), 8)
         head = "█" * full + (_WP_EIGHTHS[part - 1] if part else "")
-        bar = paint(fill, head) + paint(empty, "░" * (cells - len(head)))
+        crept = max(0, int(creep_end + 1e-9) - len(head)) if creep else 0
+        bar = (paint(fill, head)
+               + (paint(fill, _WP_CREEP_GLYPH[0] * crept) if crept else "")
+               + paint(empty, "░" * (cells - len(head) - crept)))
     first = f"{bar} {paint(hue, str(view['percent']) + '%')}"
     label = _wp_trim(view["label"], 40, ell)
     if label:
@@ -2120,34 +2295,132 @@ def fmt_work_progress(view, width=None, color=True, ascii_only=False, columns=No
     count = f"{view['done']}/{view['total']}"
     if view["current_step"]:
         count += f" {'>' if ascii_only else '▸'} {_wp_trim(view['current_step'], 30, ell)}"
-    pieces, elapsed = [first, paint(hue, count)], None
-    if view["finished"]:
-        check = "" if ascii_only else "✓ "
-        pieces.append(paint("32", f"{check}done in {fmt_span(view['elapsed_s'])}"))
-    else:
-        elapsed = paint(detail, f"{fmt_span(view['elapsed_s'])} in")
-        pieces.append(elapsed)
-        left = work_progress_left_text(view)
-        if left:
-            pieces.append(paint(hue, left))
-        if view["quiet"]:
-            mark = "! " if ascii_only else "⚠ "
-            pieces.append(paint("33", f"{mark}quiet {fmt_span(view['quiet_s'])}"))
+        if live and pulse and not view["finished"]:
+            count += f" {pulse}"
     budget = columns - RIGHT_ALIGN_MARGIN if columns else None
-    if budget and elapsed and visible_len(sep.join(pieces)) > budget:
-        pieces.remove(elapsed)
-    line = sep.join(pieces)
-    if view["note"]:
-        room = min(80, budget - visible_len(line) - len(raw_sep)) if budget else 80
-        if room >= 8:
-            line += sep + paint(detail, _wp_trim(view["note"], room, ell))
-    return line
+
+    def build(clock):
+        pieces, elapsed = [first, paint(hue, count)], None
+        if view["finished"]:
+            check = "" if ascii_only else "✓ "
+            pieces.append(paint("32", f"{check}done in {fmt_span(view['elapsed_s'])}"))
+        else:
+            elapsed = paint(detail, f"{clock(view['elapsed_s'])} in")
+            pieces.append(elapsed)
+            left = work_progress_left_text(view)
+            if left:
+                pieces.append(paint(hue, left))
+            if view["quiet"]:
+                mark = "! " if ascii_only else "⚠ "
+                pieces.append(paint("33", f"{mark}quiet {fmt_span(view['quiet_s'])}"))
+        kept_elapsed = True
+        if budget and elapsed and visible_len(sep.join(pieces)) > budget:
+            pieces.remove(elapsed)
+            kept_elapsed = False
+        line = sep.join(pieces)
+        kept_note = not view["note"]
+        if view["note"]:
+            room = min(80, budget - visible_len(line) - len(raw_sep)) if budget else 80
+            if room >= 8:
+                line += sep + paint(detail, _wp_trim(view["note"], room, ell))
+                kept_note = True
+        return line, kept_elapsed and kept_note
+
+    if live and not view["finished"]:
+        line, whole = build(fmt_span_clock)
+        if whole:
+            return line
+    return build(fmt_span)[0]
 
 
-def work_progress_line(session_id, now):
+def _wp_recent(path, since):
+    try:
+        return os.stat(path).st_mtime >= since
+    except OSError:
+        return False
+
+
+def _wp_any_recent(folder, since, suffix=None, depth=1):
+    """True when `folder` itself, or an entry in it (and one level further
+    down with depth=2), was modified at or after `since`. One scandir per
+    folder and an early exit: never a walk of the whole projects tree."""
+    if not folder or not _wp_recent(folder, 0):
+        return False
+    if _wp_recent(folder, since):
+        return True
+    try:
+        with os.scandir(folder) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if depth > 1 and _wp_any_recent(entry.path, since, suffix, depth - 1):
+                            return True
+                        continue
+                    if suffix and not entry.name.endswith(suffix):
+                        continue
+                    if entry.stat(follow_symlinks=False).st_mtime >= since:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        return False
+    return False
+
+
+def work_progress_activity(session_id, transcript_path, now_ts):
+    """True when the session really wrote something in the last
+    WP_PULSE_WINDOW_S seconds: its own transcript, a transcript of one of
+    its subagents (<transcript without .jsonl>/subagents/*.jsonl), or a
+    file under its tasks folder (~/.claude/tasks/<session id>/). Paths come
+    from the status line's own payload; cheapest check first."""
+    since = now_ts - WP_PULSE_WINDOW_S
+    if transcript_path and _wp_recent(transcript_path, since):
+        return True
+    safe = _WP_SESSION_RE.sub("", str(session_id or ""))[:80]
+    if safe and _wp_any_recent(os.path.join(os.path.expanduser("~/.claude/tasks"), safe), since, depth=2):
+        return True
+    if transcript_path and transcript_path.endswith(".jsonl"):
+        subagents = os.path.join(transcript_path[: -len(".jsonl")], "subagents")
+        if _wp_any_recent(subagents, since, suffix=".jsonl"):
+            return True
+    return False
+
+
+def work_progress_pulse_path(session_id):
+    safe = _WP_SESSION_RE.sub("", str(session_id or ""))[:80]
+    return os.path.join(WORK_PROGRESS_DIR, f".work-progress-{safe}.pulse") if safe else None
+
+
+def work_progress_pulse(session_id, transcript_path, now_ts, ascii_only=False):
+    """The glyph beside the running step: the next frame on every redraw
+    while work_progress_activity() is true (the frame index is kept in a
+    one-number file, so consecutive redraws always differ), else the still
+    glyph. Any error gives the still glyph."""
+    frames, still = _WP_PULSE_ASCII if ascii_only else _WP_PULSE
+    try:
+        if not work_progress_activity(session_id, transcript_path, now_ts):
+            return still
+        path = work_progress_pulse_path(session_id)
+        if not path:
+            return still
+        try:
+            with open(path) as f:
+                index = (int(f.read().strip() or 0) + 1) % len(frames)
+        except (OSError, ValueError):
+            index = 0
+        with open(path, "w") as f:
+            f.write(str(index))
+        return frames[index]
+    except Exception:
+        return still
+
+
+def work_progress_line(session_id, now, transcript_path=None):
     """statusline.py's progress row for this session, or "" -- no bar set
     (costs one os.path.exists() and nothing more), a hidden bar, or any
-    error at all, since a render must never break on this file."""
+    error at all, since a render must never break on this file.
+    `transcript_path` (from the status line's payload) lets the pulse see
+    the session's own writes; without it only the tasks folder is seen."""
     path = work_progress_path(session_id)
     if not path or not os.path.exists(path):
         return ""
@@ -2158,7 +2431,12 @@ def work_progress_line(session_id, now):
         view = work_progress_view(state, now)
         if not view["visible"]:
             return ""
+        ascii_only = work_progress_ascii_default()
+        live = work_progress_live()
+        pulse = None
+        if live and not view["finished"] and view["current_step"]:
+            pulse = work_progress_pulse(session_id, transcript_path, now.timestamp(), ascii_only)
         return fmt_work_progress(view, color=not work_progress_no_color(),
-                                 ascii_only=work_progress_ascii_default())
+                                 ascii_only=ascii_only, live=live, pulse=pulse)
     except Exception:
         return ""

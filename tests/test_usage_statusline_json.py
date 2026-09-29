@@ -222,7 +222,11 @@ class JsonFlagKnownCalibratedStateTest(IsolatedHomeTestCase):
                 "seven_day": {"used_percentage": seven_day_pct, "resets_at": next_reset_epoch},
             },
         }
-        result = run_statusline(payload, args=["--json"], home=self.home)
+        # Counted in the call (0.23.0): see CLAUDE_USAGE_SCAN_WAIT in
+        # usage_common.scan_totals(); the redraw's own scheduling is tested
+        # in tests/test_live_progress.py.
+        wait = {"CLAUDE_USAGE_SCAN_WAIT": "1"}
+        result = run_statusline(payload, args=["--json"], home=self.home, extra_env=wait)
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout.strip())
 
@@ -236,7 +240,7 @@ class JsonFlagKnownCalibratedStateTest(IsolatedHomeTestCase):
         self.assertIsNone(data["tracked_model"]["stale_past_grace"])
 
         # The text line must report the exact same number, just formatted.
-        text_out = run_statusline(payload, home=self.home).stdout.strip()
+        text_out = run_statusline(payload, home=self.home, extra_env=wait).stdout.strip()
         self.assertIn("fable: 10%", text_out)
 
 

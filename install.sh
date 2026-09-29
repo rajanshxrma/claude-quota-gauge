@@ -94,10 +94,17 @@ def normalize(cmd):
 
 existing_statusline = settings.get("statusLine", {}).get("command")
 if not existing_statusline:
-    settings["statusLine"] = {"type": "command", "command": statusline_command, "refreshInterval": 60}
+    settings["statusLine"] = {"type": "command", "command": statusline_command, "refreshInterval": 2}
     print(f"  set statusLine to {statusline_command}")
 elif normalize(existing_statusline) == normalize(statusline_command):
-    print("  statusLine already points here, left settings.json unchanged")
+    # 0.23.0: the work progress row is live, and a 2 second timer is what
+    # keeps it moving through a quiet step. Only our own earlier default (60)
+    # or no timer at all is changed; any other value is someone's choice.
+    if settings["statusLine"].get("refreshInterval") in (None, 60):
+        settings["statusLine"]["refreshInterval"] = 2
+        print("  statusLine already points here; set its refreshInterval to 2 seconds")
+    else:
+        print("  statusLine already points here, left settings.json unchanged")
 elif os.path.basename(normalize(existing_statusline)) == "usage-statusline.py":
     # Pre-0.9.0 installs pointed straight at the quota renderer. statusline.py
     # now wraps it and adds the workload gauge, so upgrade that old default in
@@ -106,7 +113,7 @@ elif os.path.basename(normalize(existing_statusline)) == "usage-statusline.py":
     print("  upgraded statusLine to the combined bar (quota + workload gauge)")
 else:
     print(f"  statusLine already set to something else ({existing_statusline!r}) -- left it alone.")
-    print(f"    Add this yourself if you want ours: {{\"type\": \"command\", \"command\": \"{statusline_command}\", \"refreshInterval\": 60}}")
+    print(f"    Add this yourself if you want ours: {{\"type\": \"command\", \"command\": \"{statusline_command}\", \"refreshInterval\": 2}}")
 
 hooks = settings.setdefault("hooks", {})
 session_start = hooks.setdefault("SessionStart", [])
@@ -222,7 +229,7 @@ with open(settings_path, "w") as f:
 PYEOF
 else
   echo "  skipped. Add these to ~/.claude/settings.json yourself:"
-  echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-statusline.py", "refreshInterval": 60 }'
+  echo '    "statusLine": { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/statusline.py", "refreshInterval": 2 }'
   echo '    "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/usage-session-hook.py", "timeout": 15 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/update-check-session-hook.py", "timeout": 8 } ] } ], "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/theme-watch-prompt-hook.py", "timeout": 5 } ] } ], { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-stale-prompt-hook.py", "timeout": 5 } ] }, { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/title-collision-prompt-hook.py", "timeout": 10 } ] } ], "PostToolUse": [ { "matcher": "Agent", "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/fable-agent-posttooluse-hook.py", "timeout": 5, "async": true } ] } ], "PreModelSwitch": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/model-switch-hook.py", "timeout": 10 } ] } ], "PostModelSwitch": [ { "hooks": [ { "type": "command", "command": "python3 '"$SCRIPTS_DIR"'/model-switch-hook.py", "timeout": 5, "async": true } ] } ] }'
 fi
 

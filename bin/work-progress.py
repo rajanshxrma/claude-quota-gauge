@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from usage_common import (  # noqa: E402
     WORK_PROGRESS_DIR, fmt_span, fmt_span_approx, fmt_work_progress, load_env_file,
     work_progress_ascii_default, work_progress_left_text, work_progress_load,
-    work_progress_no_color, work_progress_path, work_progress_view,
+    work_progress_no_color, work_progress_path, work_progress_pulse_path, work_progress_view,
 )
 
 try:
@@ -131,6 +131,7 @@ def prune(now_ts):
     cutoff = now_ts - PRUNE_AFTER_DAYS * 86400
     paths = glob.glob(os.path.join(WORK_PROGRESS_DIR, "work-progress-*.json"))
     paths += glob.glob(os.path.join(WORK_PROGRESS_DIR, ".work-progress-*.tmp"))
+    paths += glob.glob(os.path.join(WORK_PROGRESS_DIR, ".work-progress-*.pulse"))
     for path in paths:
         with contextlib.suppress(OSError):
             if os.path.getmtime(path) < cutoff:
@@ -302,6 +303,8 @@ def cmd_eta(args, sid, now_ts, parser):
 
 
 def cmd_clear(args, sid, now_ts, parser):
+    with contextlib.suppress(OSError, TypeError):
+        os.remove(work_progress_pulse_path(sid))  # the pulse's frame counter
     try:
         os.remove(work_progress_path(sid))
     except FileNotFoundError:
