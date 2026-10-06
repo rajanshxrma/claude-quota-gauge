@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] - 2026-10-06
+
+### Added
+- **Hands off the Mac.** A job that is about to drive the Mac's pointer or
+  keyboard raises a flag (`~/.claude/hands-off.json`) and the status line
+  draws it as its own first row, bold white on red, with what is running
+  and about how long is left:
+  `✋ HANDS OFF THE MAC — UI test is dragging across the app · about 4 min left`.
+  A paused job says it is waiting for the Mac to be left alone instead.
+  - `bin/hands-off-flag.py set / clear / status / run -- CMD`; from Python,
+    `hands_off_set()` / `hands_off_clear()` in `usage_common.py`, or write
+    the same JSON.
+  - A flag whose owning pid has exited, or that is 30 minutes past its
+    estimate, is ignored and removed on the next redraw, so a killed job
+    never leaves it standing. It never blinks; `NO_COLOR` and
+    `CLAUDE_USAGE_PROGRESS_ASCII=1` are honoured.
+  - `work-progress.py status` shows the same row first.
+  - Tests in `tests/test_hands_off.py`.
+
 ## [0.24.1] - 2026-09-28
 
 ### Changed

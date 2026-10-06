@@ -53,6 +53,12 @@ Since 0.23.0 the row is live (clock in seconds, a fill creeping through the
 running step, a pulse while the session or its agents are writing); the
 payload's transcript_path is what lets the pulse see those writes.
 
+While a job is driving this Mac's pointer or keyboard (bin/hands-off-flag.py,
+or the job's own write of ~/.claude/hands-off.json), a red row saying
+HANDS OFF THE MAC comes FIRST, above everything, so it is the first thing
+seen. It is the one row that is not calm, because it is a warning; it never
+blinks. No flag costs one os.path.exists().
+
 A redraw never waits on the week's transcript scan (0.23.0): the quota line
 reads the last finished scan and starts a fresh one detached when it is
 older than 20 seconds -- see scan_totals() in usage_common.py. Before that,
@@ -75,6 +81,7 @@ WGAUGE = os.path.join(HERE, "workload-gauge.py")
 sys.path.insert(0, HERE)
 from usage_common import (  # noqa: E402
     fmt_ultracode_styled,
+    hands_off_line,
     load_env_file,
     right_align,
     session_title,
@@ -194,5 +201,14 @@ except Exception:
     progress = ""
 if progress:
     lines.append(progress)
+
+# Hands off the Mac (0.25.0): its own row, first, while a job holds the
+# pointer or keyboard; nothing when no flag is up or its owner is gone.
+try:
+    hands_off = hands_off_line()
+except Exception:
+    hands_off = ""
+if hands_off:
+    lines.insert(0, hands_off)
 
 sys.stdout.write("\n".join(lines))

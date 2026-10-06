@@ -39,7 +39,8 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from usage_common import (  # noqa: E402
-    WORK_PROGRESS_DIR, fmt_span, fmt_span_approx, fmt_work_progress, load_env_file,
+    WORK_PROGRESS_DIR, fmt_hands_off, fmt_span, fmt_span_approx, fmt_work_progress,
+    hands_off_load, load_env_file,
     work_progress_ascii_default, work_progress_left_text, work_progress_load,
     work_progress_no_color, work_progress_path, work_progress_pulse_path, work_progress_view,
 )
@@ -378,6 +379,12 @@ def cmd_status(args, sid, now_ts, parser):
             out["segment"] = fmt_work_progress(view, color=False, ascii_only=False, columns=0)
         print(json.dumps(out, indent=2, ensure_ascii=False))
         return 0
+    # The hands-off flag (hands-off-flag.py) is the status line's first row;
+    # `status` says it first too, whatever the bar's own state. (Not in
+    # --json, whose shape stays fixed: `hands-off-flag.py status --json`.)
+    hands_off = hands_off_load(now_ts)
+    if hands_off:
+        print(fmt_hands_off(hands_off, now_ts, color=cli_color(), ascii_only=work_progress_ascii_default()))
     if not state:
         print(problem)
         return 0

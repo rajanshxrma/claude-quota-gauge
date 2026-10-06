@@ -2440,3 +2440,168 @@ def work_progress_line(session_id, now, transcript_path=None):
                                  ascii_only=ascii_only, live=live, pulse=pulse)
     except Exception:
         return ""
+
+
+# --- Hands off the Mac -------------------------------------------------------
+# A flag a long job raises while it drives this Mac's pointer or keyboard
+# (a UI test dragging across an app, a recorder taking the screen), so the
+# person at the status line knows not to touch it. One file for the whole
+# Mac, ~/.claude/hands-off.json:
+#   {"reason": "...", "since": ISO, "until": ISO estimate, "pid": N,
+#    "paused": false}
+# bin/hands-off-flag.py sets and clears it from a shell; a script can write
+# the same JSON itself. The status line draws it as its own FIRST row, red,
+# because it is a warning (the one row that is not calm). A flag whose pid has
+# died, or that is more than HANDS_OFF_STALE_S past its `until`, is ignored
+# and removed on the next redraw, so a job killed with no chance to clean up
+# never leaves the warning standing.
+
+HANDS_OFF_PATH = os.path.expanduser("~/.claude/hands-off.json")
+HANDS_OFF_STALE_S = 30 * 60
+
+
+def _hands_off_pid_alive(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # alive, owned by someone else
+    except OSError:
+        return False
+    return True
+
+
+def _hands_off_ts(value):
+    """An ISO time (or a bare epoch number) as epoch seconds, else None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()  # a naive time is local time
+    return parsed.timestamp()
+
+
+def hands_off_set(reason, minutes, pid=None, paused=False, path=None):
+    """Raises (or restates) the flag: `minutes` from now is the estimate.
+    `pid` is the process that owns it (default: the caller); the flag goes
+    when that process does. `pid=0` leaves it ownerless: only the time rule
+    ends it. Atomic, so a redraw never reads half a file."""
+    import tempfile
+    path = path or HANDS_OFF_PATH
+    now = datetime.now(timezone.utc).astimezone()
+    record = {"reason": str(reason).strip(), "since": now.isoformat(timespec="seconds"),
+              "until": (now + timedelta(minutes=max(0.0, float(minutes)))).isoformat(timespec="seconds"),
+              "pid": (int(pid) or None) if pid is not None else os.getpid(), "paused": bool(paused)}
+    try:
+        old = json.load(open(path, encoding="utf-8"))
+        if record["pid"] and old.get("pid") == record["pid"] and old.get("since"):
+            record["since"] = old["since"]  # the same owner restating keeps its start
+    except Exception:
+        pass
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".hands-off-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return record
+
+
+def hands_off_clear(pid=None, path=None):
+    """Lowers the flag. With `pid`, only a flag that pid owns (a job never
+    clears another job's warning). True when a flag was removed."""
+    path = path or HANDS_OFF_PATH
+    if pid is not None:
+        try:
+            owner = json.load(open(path, encoding="utf-8")).get("pid")
+        except Exception:
+            owner = int(pid)  # unreadable: removing it is the safe side
+        if owner != int(pid):
+            return False
+    try:
+        os.remove(path)
+        return True
+    except OSError:
+        return False
+
+
+def hands_off_load(now_ts=None, path=None, prune=True):
+    """The live flag as a dict (with `until_ts`), or None. A stale flag (its
+    pid dead, or HANDS_OFF_STALE_S past `until`) is None, and removed when
+    `prune`. Never raises: the status line calls this on every redraw."""
+    path = path or HANDS_OFF_PATH
+    try:
+        if not os.path.exists(path):
+            return None
+        state = json.load(open(path, encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("not an object")
+        now_ts = now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp()
+        until = _hands_off_ts(state.get("until"))
+        dead = state.get("pid") is not None and not _hands_off_pid_alive(state.get("pid"))
+        if dead or until is None or now_ts > until + HANDS_OFF_STALE_S:
+            if prune:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            return None
+        state["until_ts"] = until
+        return state
+    except Exception:
+        return None
+
+
+def fmt_hands_off(state, now_ts=None, color=True, ascii_only=False):
+    """The row: `✋ HANDS OFF THE MAC — <reason> · about 6 min left`, bold
+    white on red (legible on light and dark terminals alike; it never
+    blinks). Paused, the time is left out: the job waits for the Mac to be
+    left alone and says so in its reason."""
+    now_ts = now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp()
+    left = state["until_ts"] - now_ts
+    if state.get("paused"):
+        when = ""
+    elif left <= 0:
+        when = "running past its estimate"
+    elif left < 60:
+        when = "under a minute left"
+    else:
+        when = "about %d min left" % -(-int(left) // 60)
+    hand, dash, dot = ("!!", "--", "-") if ascii_only else ("✋", "—", "·")
+    text = "%s HANDS OFF THE MAC %s %s" % (hand, dash, state.get("reason") or "a job is driving the pointer")
+    if when:
+        text += " %s %s" % (dot, when)
+    if not color:
+        return text
+    return "\033[1;97;41m %s \033[0m" % text
+
+
+def hands_off_line(now_ts=None):
+    """statusline.py's hands-off row, or "" (no flag: one os.path.exists())."""
+    state = hands_off_load(now_ts)
+    if not state:
+        return ""
+    try:
+        return fmt_hands_off(state, now_ts, color=not work_progress_no_color(),
+                             ascii_only=work_progress_ascii_default())
+    except Exception:
+        return ""

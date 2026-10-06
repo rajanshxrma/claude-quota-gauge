@@ -582,6 +582,17 @@ width (8 to 20 cells) unless `CLAUDE_USAGE_PROGRESS_WIDTH` or `--width`
 sets it, and the line trims its note, then drops the clock's seconds, then
 the note, then the elapsed time, rather than wrap.
 
+### Hands off the Mac
+
+When a job is about to drive the Mac's pointer or keyboard (a UI test
+dragging across an app, say), it can put a red row at the top of the bar,
+`✋ HANDS OFF THE MAC — UI test is dragging across the app · about 4 min left`,
+so you know to leave the Mac alone until it's gone:
+`python3 ~/.claude/scripts/hands-off-flag.py set --reason "..." --minutes 4 --pid $$`,
+then `clear`, or `hands-off-flag.py run --reason "..." --minutes 4 -- <command>`
+to wrap a command. The row goes away by itself when the owning process exits
+or 30 minutes after its estimate. It costs one file-existence check per render.
+
 ## Configuration
 
 `install.sh` copies `config/claude-quota-gauge.env.example` to
