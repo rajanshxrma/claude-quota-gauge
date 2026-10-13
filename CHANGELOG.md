@@ -4,6 +4,19 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] - 2026-10-13
+
+### Changed
+- **The 5.x models are priced as themselves.** `tokens-since.py` prices
+  `claude-fable-5-1` ($10/$50), `claude-opus-5-5` ($4/$20),
+  `claude-sonnet-5-5` ($2/$10) and `claude-haiku-5-5` ($0.10/$0.50) by their
+  own list prices, and a cache read on them costs what the pricing page
+  lists ($0.25, $0.20 and $0.10 per MTok) instead of a tenth of input. Until
+  now every one of them fell back to Sonnet 5's row, so the weekly estimate
+  drifted whenever the week's mix of models or cache reads moved. Sonnet 5's
+  own row is $2/$10 (the scheduled rise to $3/$15 did not occur). Found by
+  Ascent, Rajan's logbook routine, on 13 Oct 2026.
+
 ## [0.25.0] - 2026-10-06
 
 ### Added

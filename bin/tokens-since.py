@@ -5,8 +5,10 @@ directly -- no ccusage dependency, no calendar-week bucketing.
 
 Why cost-weighted: Anthropic's weekly usage pool is metered by compute cost,
 not token count. Output tokens run 5x the price of input on every current
-model, cache reads are ~10% of input price, cache writes are ~125%, and Fable
-5 costs 2x Opus per token. Summing raw tokens 1:1 drifts from the real
+model, cache writes are ~125% of input, cache reads are ~10% of input on the
+older models and a listed price of their own on the 5.x models (Fable 5.1
+$0.25, Opus 5.5 $0.20, Sonnet 5.5 $0.10 per MTok), and Fable costs 2.5x Opus
+5.5 per token. Summing raw tokens 1:1 drifts from the real
 percentage whenever the mix of token types or models shifts between
 calibrations -- weighting by list price is the closest available proxy for
 the underlying compute-cost metric.
@@ -41,13 +43,19 @@ import sys, os, json, time
 # $ per 1M tokens: (input, output). Cache write is 1.25x input (5m TTL,
 # the default and only TTL these transcripts use); cache read is 0.1x input.
 PRICING = {
+    # 0.26.0 (13 Oct 2026, Ascent A-0039 on his word): the four current models,
+    # from Anthropic's pricing pages as read on 12 Oct 2026 (ascent/capability/log.jsonl).
+    "claude-fable-5-1": (10.00, 50.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-4-7": (5.00, 25.00),
     "claude-opus-4-6": (5.00, 25.00),
     "claude-opus-4-5": (5.00, 25.00),
     "claude-opus-4-1": (5.00, 25.00),
     "claude-opus-4-0": (5.00, 25.00),
-    "claude-sonnet-5": (3.00, 15.00),
+    "claude-sonnet-5": (2.00, 10.00),  # the scheduled rise to $3/$15 did not occur (pricing page, read 12 Oct 2026)
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-sonnet-4-5": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
@@ -56,6 +64,14 @@ PRICING = {
 }
 CACHE_WRITE_MULT = 1.25
 CACHE_READ_MULT = 0.1
+# Cache reads are no longer one tenth of input on every model (0.26.0): the
+# list price per MTok where the pricing page gives one; any other model keeps
+# CACHE_READ_MULT x its input price.
+CACHE_READ_PRICE = {
+    "claude-fable-5-1": 0.25,
+    "claude-opus-5-5": 0.20,
+    "claude-sonnet-5-5": 0.10,
+}
 FALLBACK_PRICING = PRICING["claude-sonnet-5"]  # unknown/future model IDs
 
 SCAN_VERSION = 1
@@ -84,14 +100,23 @@ def lock_path():
     return os.path.join(scripts_dir(), "tokens-since.lock")
 
 
+def cache_read_price(model):
+    """Dollars per MTok for a cache read on `model`."""
+    price_in, _ = PRICING.get(model, FALLBACK_PRICING)
+    return CACHE_READ_PRICE.get(model, price_in * CACHE_READ_MULT)
+
+
 def cost(model, usage):
     price_in, price_out = PRICING.get(model, FALLBACK_PRICING)
-    weighted_input = (
+    uncached = (
         usage.get("input_tokens", 0)
         + usage.get("cache_creation_input_tokens", 0) * CACHE_WRITE_MULT
-        + usage.get("cache_read_input_tokens", 0) * CACHE_READ_MULT
     )
-    return (weighted_input * price_in + usage.get("output_tokens", 0) * price_out) / 1_000_000
+    return (
+        uncached * price_in
+        + usage.get("cache_read_input_tokens", 0) * cache_read_price(model)
+        + usage.get("output_tokens", 0) * price_out
+    ) / 1_000_000
 
 
 def _read_json(path):
